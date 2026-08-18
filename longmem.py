@@ -290,7 +290,7 @@ def _run(args: argparse.Namespace) -> None:
   out = args.out or Path("runs") / f"{args.retriever}-{run_id[:12]}.json"
   _write(out, receipt)
   if args.contexts is not None:
-    _write_jsonl(args.contexts, contexts)
+    _write_jsonl(args.contexts, [{**context, "run_id": run_id} for context in contexts])
   print(
     json.dumps(
       {

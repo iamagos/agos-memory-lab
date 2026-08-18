@@ -44,7 +44,9 @@ pinned sessions
   -> ranked occurrence routes
   -> agos_memory.select()             order, limits, omissions
   -> bounded dated-session context
-  -> content-addressed receipt        IDs and hashes, never corpus text
+  -> direct reader                    hypothesis
+  -> pinned official judge            QA score
+  -> content-addressed receipts       IDs and hashes, never corpus text
 ```
 
 Fetch and verify LongMemEval-S, then run the credential-free BM25 baseline:
@@ -86,10 +88,46 @@ released haystack—not its descriptive timestamp—as corpus availability. The
 optional contexts file contains the question and exact bounded selection text,
 including explicit truncation, but no gold answer.
 
-This command implements retrieval and exact context compilation. It does not
-claim an end-to-end LongMemEval QA score: a reader must turn the contexts into
-the official `{question_id, hypothesis}` JSONL, and the official evaluator must
-judge those hypotheses in a separately authorized model run.
+`qa.py` closes the end-to-end seam with one direct OpenAI-compatible boundary.
+It checkpoints after each response and resumes only when the complete request
+identity still matches. Calls are sequential, have no retries, reject redirects,
+and never persist the API key. A durable `*.pending.json` marker is written
+before each call; an unknown outcome blocks another call until an operator
+inspects and resolves it.
+
+```bash
+uv run python qa.py read \
+  --contexts runs/lexical-contexts.jsonl \
+  --out runs/lexical-hypotheses.jsonl \
+  --model READER_MODEL \
+  --limit 5 \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost HARD_USD_CAP
+
+uv run python qa.py judge \
+  --hypotheses runs/lexical-hypotheses.jsonl \
+  --dataset s \
+  --out runs/lexical-evaluation.jsonl \
+  --model JUDGE_MODEL \
+  --limit 5 \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost HARD_USD_CAP
+```
+
+The default credential is `OPENAI_API_KEY`. A local compatible server can use
+`OPENAI_API_KEY=EMPTY --base-url http://127.0.0.1:8001/v1`. Nonzero prices
+require a hard cap; the runner reserves a deliberately conservative maximum
+before every request and reports both provider usage and reserved cost.
+
+The judge copies the task-specific and abstention behavior from the pinned
+[official evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/evaluate_qa.py),
+including its permissive knowledge-update rule: a response may mention stale
+information and still pass if it also contains the update. The official score
+is therefore benchmark comparability, not proof of correction safety. The
+receipt also reports strict yes/no parse diagnostics without changing the
+official label.
 
 ## Add a suite
 

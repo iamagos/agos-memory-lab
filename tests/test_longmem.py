@@ -55,6 +55,7 @@ def test_lexical_run_emits_a_verified_governed_receipt(tmp_path: Path) -> None:
   ]
   assert receipt["cases"][0]["selected_session_ids"][0] == "answer-1"
   assert context["question_id"] == "degree"
+  assert context["run_id"] == receipt["run_id"]
   assert "assistant: Congratulations." in context["context"]
   assert "answer" not in context
   assert receipt_hash == hashlib.sha256(
