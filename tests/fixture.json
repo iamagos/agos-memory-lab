@@ -1,0 +1,74 @@
+[
+  {
+    "question_id": "degree",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "answer": "Business Administration",
+    "question_date": "2024/01/03 (Wed) 12:00",
+    "haystack_session_ids": ["noise-1", "noise-1", "answer-1"],
+    "haystack_dates": [
+      "2024/01/01 (Mon) 12:00",
+      "2024/01/01 (Mon) 13:00",
+      "2024/01/03 (Wed) 13:00"
+    ],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I bought a new bicycle."},
+        {"role": "assistant", "content": "That sounds fun."}
+      ],
+      [
+        {"role": "user", "content": "I bought a new bicycle."},
+        {"role": "assistant", "content": "That sounds fun."}
+      ],
+      [
+        {"role": "user", "content": "I graduated with a degree in Business Administration.", "has_answer": true},
+        {"role": "assistant", "content": "Congratulations."}
+      ]
+    ],
+    "answer_session_ids": ["answer-1"]
+  },
+  {
+    "question_id": "update",
+    "question_type": "knowledge-update",
+    "question": "What is my favorite color?",
+    "answer": "Green",
+    "question_date": "2024/02/03 (Sat) 12:00",
+    "haystack_session_ids": ["old-color", "new-color", "noise-2"],
+    "haystack_dates": [
+      "2024/02/01 (Thu) 12:00",
+      "2024/02/02 (Fri) 12:00",
+      "2024/02/02 (Fri) 13:00"
+    ],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "My favorite color is blue."},
+        {"role": "assistant", "content": "I will remember blue."}
+      ],
+      [
+        {"role": "user", "content": "My favorite color is now green.", "has_answer": true},
+        {"role": "assistant", "content": "I will remember the update."}
+      ],
+      [
+        {"role": "user", "content": "I walked to the library."},
+        {"role": "assistant", "content": "That sounds pleasant."}
+      ]
+    ],
+    "answer_session_ids": ["new-color"]
+  },
+  {
+    "question_id": "missing_abs",
+    "question_type": "single-session-user",
+    "question": "Where did I leave my violin?",
+    "answer": "I do not know.",
+    "question_date": "2024/03/02 (Sat) 12:00",
+    "haystack_session_ids": ["noise-3"],
+    "haystack_dates": ["2024/03/01 (Fri) 12:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": ""},
+        {"role": "assistant", "content": "I hope dinner was good."}
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]
