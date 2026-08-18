@@ -29,25 +29,84 @@ uv run python smoke.py
 support check, deterministic selection, and content-addressed receipt. CI is
 local and free; it performs no networked model calls.
 
+## LongMemEval
+
+`longmem.py` is a direct experiment against the official
+[LongMemEval](https://github.com/xiaowu0162/LongMemEval) cleaned
+[corpus](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned). It
+pins the benchmark code at
+`9e0b455f4ef0e2ab8f2e582289761153549043fc` and the dataset at
+`98d7416c24c778c2fee6e6f3006e7a073259d48f`.
+
+```text
+pinned sessions
+  -> raw retrieval                    BM25 or local Qdrant
+  -> ranked occurrence routes
+  -> agos_memory.select()             order, limits, omissions
+  -> bounded dated-session context
+  -> content-addressed receipt        IDs and hashes, never corpus text
+```
+
+Fetch and verify LongMemEval-S, then run the credential-free BM25 baseline:
+
+```bash
+uv run python longmem.py fetch --dataset s
+uv run python longmem.py run \
+  --dataset s \
+  --retriever lexical \
+  --contexts runs/lexical-contexts.jsonl
+```
+
+The raw BM25 order matches the official session/user implementation, including
+its descending-index tie rule. The kernel receives that order as explicit
+`SelectionRoute` values. Its default lexical weight is zero so it applies
+budgets without silently reranking an upstream retriever; experiments may set
+`--lexical-weight` explicitly.
+
+Run dense retrieval, or fuse it with the official BM25 baseline, through an
+in-memory Qdrant collection:
+
+```bash
+uv run --script longmem.py run \
+  --dataset s \
+  --retriever qdrant-hybrid \
+  --limit 5
+```
+
+The script-scoped dependencies keep Qdrant out of the lab and kernel runtime.
+Each receipt records the Qdrant and FastEmbed versions, exact model snapshot
+revision, model-tree hash, BM25 identity, RRF choice, limits, timings, raw
+retrieval metrics, governed metrics, and every kernel outcome. No Qdrant server
+or credential is required.
+
+LongMemEval contains duplicate session IDs and a few timestamps later than the
+question time. The adapter therefore uses a unique occurrence ID internally,
+retains the official session ID for metrics, and treats inclusion in the
+released haystack—not its descriptive timestamp—as corpus availability. The
+optional contexts file contains the question and exact bounded selection text,
+including explicit truncation, but no gold answer.
+
+This command implements retrieval and exact context compilation. It does not
+claim an end-to-end LongMemEval QA score: a reader must turn the contexts into
+the official `{question_id, hypothesis}` JSONL, and the official evaluator must
+judge those hypotheses in a separately authorized model run.
+
 ## Add a suite
 
-Start with one direct, one-word executable such as `longmem.py`:
+Use the same narrow pattern:
 
-1. Pin the upstream dataset revision and verify its hash.
-2. Normalize it into finite public values at the script boundary.
-3. Make time, limits, models, embedders, and retrieval routes explicit.
-4. Emit one JSON receipt containing configuration, candidates, decisions,
-   latency, tokens, cost, omissions, and suite scores.
-5. Keep downloaded data, credentials, and full run output in ignored `data/`
-   and `runs/` directories.
+1. Pin and hash public inputs.
+2. Normalize finite values at the boundary.
+3. Make time, limits, models, and routes explicit.
+4. Emit one immutable receipt separating acquisition, kernel decisions, and
+   suite scores.
+5. Keep data, credentials, and full outputs in ignored `data/` and `runs/`.
 
 Use PEP 723 inline dependencies when a suite needs its own incompatible stack.
 Do not create a common runner, provider registry, storage interface, dashboard,
 or adapter framework until two genuinely different suites prove the same
 abstraction is necessary.
 
-The first target is a cleaned, revision-pinned LongMemEval experiment covering
-correction, deletion, restart, partition isolation, and exact source support.
 Paid or authenticated runs are always explicit and remain outside CI.
 
 ## Boundary
@@ -59,4 +118,3 @@ authority, schemas, prompts, customer data, or evaluation cases.
 ## License
 
 Copyright 2026 I am Agos, Inc. Licensed under the Apache License, Version 2.0.
-
