@@ -1,0 +1,28 @@
+[project]
+name = "agos-memory-lab"
+version = "0.0.0"
+description = "Public, reproducible experiments for agos-memory"
+requires-python = ">=3.11"
+dependencies = [
+  "agos-memory==0.1.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.12,<1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
