@@ -32,7 +32,7 @@ class ModelConfig:
   base_url: str
   api_version: str | None
   model: str
-  temperature: float
+  temperature: float | None
   max_tokens: int
   timeout: float
 
@@ -73,7 +73,9 @@ class ModelConfig:
         raise ModelError("chat_api_version_required")
     if not isinstance(self.model, str) or not self.model.strip() or _unsafe(self.model):
       raise ModelError("chat_model_invalid")
-    if not _number(self.temperature) or not math.isfinite(self.temperature) or self.temperature < 0:
+    if self.temperature is not None and (
+      not _number(self.temperature) or not math.isfinite(self.temperature) or self.temperature < 0
+    ):
       raise ModelError("chat_temperature_invalid")
     if not isinstance(self.max_tokens, int) or isinstance(self.max_tokens, bool) or self.max_tokens < 1:
       raise ModelError("chat_token_limit_invalid")
@@ -119,7 +121,7 @@ async def _complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelR
     agent = Agent(chat, retries=0)
     result = await agent.run(
       prompt,
-      model_settings={"temperature": config.temperature, "max_tokens": config.max_tokens},
+      model_settings=_settings(config, chat=chat),
       retries=0,
       usage_limits=UsageLimits(request_limit=1),
     )
@@ -136,6 +138,19 @@ async def _complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelR
   if usage.total_tokens == 0:
     tokens = (None, None, None)
   return ModelResult(content, response_model.strip(), *tokens)
+
+
+def _settings(config: ModelConfig, *, chat: OpenAIChatModel) -> dict[str, float | int]:
+  settings: dict[str, float | int] = {"max_tokens": config.max_tokens}
+  if config.temperature is None:
+    return settings
+  profile = chat.profile
+  if profile.get("openai_supports_reasoning", False) and profile.get(
+    "openai_reasoning_enabled_by_default", False
+  ):
+    raise ModelError("chat_temperature_unsupported")
+  settings["temperature"] = config.temperature
+  return settings
 
 
 def _http(config: ModelConfig) -> httpx.AsyncClient:

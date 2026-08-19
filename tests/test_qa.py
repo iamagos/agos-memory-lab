@@ -52,7 +52,7 @@ def test_reader_checkpoints_and_exact_resume_makes_no_second_call(
   assert record["cost"] == {"estimated_usd": 0.0, "reserved_usd": 0.0}
   assert not out.with_suffix(".jsonl.pending.json").exists()
   assert digest == qa._digest(receipt)
-  assert receipt["schema"] == "agos-memory-lab-read-v3"
+  assert receipt["schema"] == "agos-memory-lab-read-v4"
   assert receipt["config"] == {
     "request": {
       "adapter": {
@@ -64,7 +64,7 @@ def test_reader_checkpoints_and_exact_resume_makes_no_second_call(
       "base_url": "https://api.openai.com/v1",
       "api_version": None,
       "model": "reader-v1",
-      "temperature": 0.0,
+      "temperature": None,
       "max_tokens": 1_000,
     },
     "execution": {
@@ -194,7 +194,7 @@ def test_request_identity_includes_azure_api_version() -> None:
     base_url="https://resource.openai.azure.com",
     api_version="2025-04-01-preview",
     model="reader-v1",
-    temperature=0,
+    temperature=None,
     max_tokens=1_000,
     timeout=120,
     input_cost=0,
@@ -373,7 +373,7 @@ def _chat_config() -> qa.ChatConfig:
     base_url="https://api.openai.com/v1",
     api_version=None,
     model="reader-v1",
-    temperature=0,
+    temperature=None,
     max_tokens=1_000,
     timeout=120,
     input_cost=0,
