@@ -179,6 +179,37 @@ abstraction is necessary.
 
 Paid or authenticated runs are always explicit and remain outside CI.
 
+## Memory artifact
+
+`memory.py` is the pure, pre-retrieval half of the source-linked LongMemEval
+experiment:
+
+```text
+pinned sessions + frozen extractor rows
+  -> exact source validation
+  -> agos_memory.admit()
+  -> immutable, content-addressed memory artifact
+```
+
+The checked-in extractor is synthetic and exists only to prove the contract
+without a model call:
+
+```bash
+uv run python memory.py \
+  --file tests/fixture.json \
+  --sha256 9df07a9961774981e0ed9a0685f02f284063cf8155a3cec18b55c18f0eb67876 \
+  --revision fixture-v1 \
+  --extractor tests/extractor.jsonl \
+  --extractor-sha256 cdd5ddff0f7a1ddd66d4f2a5d8a4a99777000322e4a0b7b1992c6fc50ff026a3
+```
+
+Every proposal binds one case, session occurrence, date, digest, extractor
+identity, and ordinal. The compiler applies proposals chronologically, records
+every accept, reject, and replacement, and keeps replacement as lineage. The
+pure compiler does not receive benchmark questions, answers, answer-session
+IDs, or abstention labels. Retention, retrieval, reader calls, and judging
+remain separate stages.
+
 ## Boundary
 
 Public benchmark code may depend on public packages and public or properly
