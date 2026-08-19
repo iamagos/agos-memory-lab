@@ -52,10 +52,17 @@ def test_reader_checkpoints_and_exact_resume_makes_no_second_call(
   assert record["cost"] == {"estimated_usd": 0.0, "reserved_usd": 0.0}
   assert not out.with_suffix(".jsonl.pending.json").exists()
   assert digest == qa._digest(receipt)
-  assert receipt["schema"] == "agos-memory-lab-read-v2"
+  assert receipt["schema"] == "agos-memory-lab-read-v3"
   assert receipt["config"] == {
     "request": {
+      "adapter": {
+        "api": "chat-completions",
+        "openai": "3.3.0",
+        "pydantic_ai": "2.21.0",
+      },
+      "provider": "openai",
       "base_url": "https://api.openai.com/v1",
+      "api_version": None,
       "model": "reader-v1",
       "temperature": 0.0,
       "max_tokens": 1_000,
@@ -161,6 +168,10 @@ def test_request_identity_excludes_execution_policy() -> None:
   "change",
   [
     {"base_url": "https://example.com/v1"},
+    {
+      "provider": "azure",
+      "base_url": "https://resource.openai.azure.com/openai/v1",
+    },
     {"model": "reader-v2"},
     {"temperature": 0.5},
     {"max_tokens": 999},
@@ -174,6 +185,42 @@ def test_request_identity_includes_request_semantics(change: dict[str, object]) 
 
   assert qa._reader_id(context, changed) != qa._reader_id(context, config)
   assert qa._judge_id(reference, "Business", changed) != qa._judge_id(reference, "Business", config)
+
+
+def test_request_identity_includes_azure_api_version() -> None:
+  context = qa.Context(RUN_ID, "degree", "What degree?", "2024/01/03", "context", "b" * 64)
+  config = qa.ChatConfig(
+    provider="azure",
+    base_url="https://resource.openai.azure.com",
+    api_version="2025-04-01-preview",
+    model="reader-v1",
+    temperature=0,
+    max_tokens=1_000,
+    timeout=120,
+    input_cost=0,
+    output_cost=0,
+    max_cost=0,
+  )
+
+  assert qa._reader_id(context, replace(config, api_version="2025-03-01-preview")) != qa._reader_id(context, config)
+
+
+def test_azure_uses_azure_key_by_default() -> None:
+  args = _args(
+    "read",
+    "--contexts",
+    "contexts.jsonl",
+    "--out",
+    "out.jsonl",
+    "--provider",
+    "azure",
+    "--base-url",
+    "https://resource.openai.azure.com/openai/v1",
+    "--model",
+    "reader-v1",
+  )
+
+  assert qa._key_env(args, config=qa._config(args)) == "AZURE_OPENAI_API_KEY"
 
 
 def test_unknown_request_outcome_blocks_an_automatic_repeat(
@@ -261,27 +308,6 @@ def test_official_judge_scores_and_exact_resume_makes_no_second_call(
   assert "unanswerable question" in calls[2]
 
 
-@pytest.mark.parametrize(
-  "value,error",
-  [
-    ({}, "chat_response_invalid"),
-    ({"choices": []}, "chat_response_invalid"),
-    ({"choices": [{"message": {"content": ""}}], "model": "m"}, "chat_response_invalid"),
-    (
-      {
-        "choices": [{"message": {"content": "answer"}}],
-        "model": "m",
-        "usage": {"prompt_tokens": -1, "completion_tokens": 1, "total_tokens": 1},
-      },
-      "chat_usage_invalid",
-    ),
-  ],
-)
-def test_chat_response_validation_is_fail_closed(value: object, error: str) -> None:
-  with pytest.raises(qa.QAError, match=f"^{error}$"):
-    qa._chat_result(value)
-
-
 def test_remote_plaintext_endpoint_is_rejected() -> None:
   args = _args(
     "read",
@@ -343,7 +369,9 @@ def _args(*values: str):
 
 def _chat_config() -> qa.ChatConfig:
   return qa.ChatConfig(
+    provider="openai",
     base_url="https://api.openai.com/v1",
+    api_version=None,
     model="reader-v1",
     temperature=0,
     max_tokens=1_000,

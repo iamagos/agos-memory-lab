@@ -5,6 +5,8 @@ description = "Public, reproducible experiments for agos-memory"
 requires-python = ">=3.11"
 dependencies = [
   "agos-memory==0.1.0",
+  "openai==3.3.0",
+  "pydantic-ai-slim[openai]==2.21.0",
   "rank-bm25==0.2.2",
 ]
 
