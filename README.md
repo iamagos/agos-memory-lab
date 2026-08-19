@@ -88,12 +88,12 @@ released haystack—not its descriptive timestamp—as corpus availability. The
 optional contexts file contains the question and exact bounded selection text,
 including explicit truncation, but no gold answer.
 
-`qa.py` closes the end-to-end seam with one direct OpenAI-compatible boundary.
-It checkpoints after each response and resumes only when the complete request
-identity still matches. Calls are sequential, have no retries, reject redirects,
-and never persist the API key. A durable `*.pending.json` marker is written
-before each call; an unknown outcome blocks another call until an operator
-inspects and resolves it.
+`qa.py` owns the experiment, while `model.py` makes one pinned Pydantic AI Chat
+Completions request. It checkpoints after each response and resumes only when
+the complete request identity still matches. Calls are sequential, have no
+retries, reject redirects, and never persist the API key. A durable
+`*.pending.json` marker is written before each call; an unknown outcome blocks
+another call until an operator inspects and resolves it.
 
 ```bash
 uv run python qa.py read \
@@ -116,14 +116,40 @@ uv run python qa.py judge \
   --max-cost HARD_USD_CAP
 ```
 
-The default credential is `OPENAI_API_KEY`. A local compatible server can use
-`OPENAI_API_KEY=EMPTY --base-url http://127.0.0.1:8001/v1`. Nonzero prices
-require a hard cap. Before a request, the runner reserves the UTF-8 prompt byte
-length, a 256-token chat envelope, and the configured output limit. Completed
-provider usage replaces its reservation when deciding whether the next request
-fits. Receipts separate model-request identity from timeout, prices, and the
-cost cap, so changing an execution limit does not invalidate an identical
-checkpoint. Both actual and reserved cost remain visible.
+The default OpenAI credential is `OPENAI_API_KEY`. A local compatible server can
+use `OPENAI_API_KEY=EMPTY --base-url http://127.0.0.1:8001/v1`. Azure uses the
+deployment name as `--model` and defaults to `AZURE_OPENAI_API_KEY`:
+
+```bash
+uv run python qa.py read \
+  --contexts runs/lexical-contexts.jsonl \
+  --out runs/azure-hypotheses.jsonl \
+  --provider azure \
+  --base-url https://RESOURCE.openai.azure.com/openai/v1 \
+  --model DEPLOYMENT
+```
+
+Azure OpenAI v1 and Foundry serverless endpoints omit `--api-version`. Legacy
+Azure endpoints require it:
+
+```bash
+uv run python qa.py read \
+  --contexts runs/lexical-contexts.jsonl \
+  --out runs/azure-hypotheses.jsonl \
+  --provider azure \
+  --base-url https://RESOURCE.openai.azure.com \
+  --api-version API_VERSION \
+  --model DEPLOYMENT
+```
+
+Nonzero prices require a hard cap. Before a request, the runner reserves the
+UTF-8 prompt byte length, a 256-token chat envelope, and the configured output
+limit. Completed provider usage replaces its reservation when deciding whether
+the next request fits. Receipts bind provider, endpoint family, API version,
+model, temperature, and output limit while keeping timeout, prices, cost cap,
+and credentials outside request identity. Both actual and reserved cost remain
+visible. Request identity also records the exact Pydantic AI and OpenAI adapter
+versions.
 
 The judge copies the task-specific and abstention behavior from the pinned
 [official evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/evaluate_qa.py),

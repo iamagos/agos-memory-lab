@@ -7,15 +7,13 @@ import math
 import os
 import re
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import fmean
 from typing import Any
 
 import longmem
+import model as chat_model
 
 
 _PROMPT_REVISION = "longmem-direct-v1"
@@ -51,33 +49,17 @@ class Reference:
 
 
 @dataclass(frozen=True, slots=True)
-class ChatConfig:
-  base_url: str
-  model: str
-  temperature: float
-  max_tokens: int
-  timeout: float
+class ChatConfig(chat_model.ModelConfig):
   input_cost: float
   output_cost: float
   max_cost: float
 
 
-@dataclass(frozen=True, slots=True)
-class ChatResult:
-  content: str
-  model: str
-  input_tokens: int | None
-  output_tokens: int | None
-  total_tokens: int | None
+ChatResult = chat_model.ModelResult
 
 
 class QAError(Exception):
   pass
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-  def redirect_request(self, request: Any, file_pointer: Any, code: int, message: str, headers: Any, url: str) -> None:
-    return None
 
 
 def main() -> None:
@@ -123,9 +105,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _chat_arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
+  parser.add_argument("--provider", choices=("openai", "azure"), default="openai")
   parser.add_argument("--model", required=True)
-  parser.add_argument("--base-url", default="https://api.openai.com/v1")
-  parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
+  parser.add_argument("--base-url")
+  parser.add_argument("--api-version")
+  parser.add_argument("--api-key-env")
   parser.add_argument("--temperature", type=float, default=0.0)
   parser.add_argument("--max-tokens", type=int, default=default_tokens)
   parser.add_argument("--timeout", type=float, default=120.0)
@@ -157,7 +141,7 @@ def _read(args: argparse.Namespace) -> None:
     prompt = _reader_prompt(context)
     _check_cost(records.values(), prompt=prompt, config=config)
     if key is None:
-      key = _key(args.api_key_env)
+      key = _key(_key_env(args, config=config))
     _begin_pending(pending_path, question_id=context.question_id, request_id=expected[context.question_id], prompt=prompt)
     started = time.perf_counter()
     result = _chat(prompt, config=config, key=key)
@@ -229,7 +213,7 @@ def _judge(args: argparse.Namespace) -> None:
     prompt = _judge_prompt(reference, hypothesis["hypothesis"])
     _check_cost(records.values(), prompt=prompt, config=config)
     if key is None:
-      key = _key(args.api_key_env)
+      key = _key(_key_env(args, config=config))
     _begin_pending(pending_path, question_id=question_id, request_id=expected[question_id], prompt=prompt)
     started = time.perf_counter()
     result = _chat(prompt, config=config, key=key)
@@ -271,41 +255,33 @@ def _judge(args: argparse.Namespace) -> None:
 
 
 def _config(args: argparse.Namespace) -> ChatConfig:
-  base_url = args.base_url.rstrip("/")
-  parts = urllib.parse.urlsplit(base_url)
-  if (
-    parts.scheme not in {"http", "https"}
-    or not parts.hostname
-    or parts.username is not None
-    or parts.password is not None
-    or parts.query
-    or parts.fragment
-    or (parts.scheme == "http" and parts.hostname not in {"localhost", "127.0.0.1", "::1"})
-  ):
-    raise QAError("chat_base_url_invalid")
-  if not isinstance(args.model, str) or not args.model.strip():
-    raise QAError("chat_model_invalid")
-  if not math.isfinite(args.temperature) or args.temperature < 0:
-    raise QAError("chat_temperature_invalid")
-  if args.max_tokens < 1:
-    raise QAError("chat_token_limit_invalid")
-  if not math.isfinite(args.timeout) or args.timeout <= 0:
-    raise QAError("chat_timeout_invalid")
+  base_url = args.base_url or ("https://api.openai.com/v1" if args.provider == "openai" else None)
+  if base_url is None:
+    raise QAError("chat_base_url_required")
   for value in (args.input_cost, args.output_cost, args.max_cost):
     if not math.isfinite(value) or value < 0:
       raise QAError("chat_cost_invalid")
   if (args.input_cost > 0 or args.output_cost > 0) and args.max_cost <= 0:
     raise QAError("chat_cost_cap_required")
-  return ChatConfig(
-    base_url=base_url,
-    model=args.model.strip(),
-    temperature=args.temperature,
-    max_tokens=args.max_tokens,
-    timeout=args.timeout,
-    input_cost=args.input_cost,
-    output_cost=args.output_cost,
-    max_cost=args.max_cost,
-  )
+  try:
+    return ChatConfig(
+      provider=args.provider,
+      base_url=base_url,
+      api_version=args.api_version,
+      model=args.model,
+      temperature=args.temperature,
+      max_tokens=args.max_tokens,
+      timeout=args.timeout,
+      input_cost=args.input_cost,
+      output_cost=args.output_cost,
+      max_cost=args.max_cost,
+    )
+  except chat_model.ModelError as exc:
+    raise QAError(str(exc)) from exc
+
+
+def _key_env(args: argparse.Namespace, *, config: ChatConfig) -> str:
+  return args.api_key_env or ("AZURE_OPENAI_API_KEY" if config.provider == "azure" else "OPENAI_API_KEY")
 
 
 def _key(name: str) -> str:
@@ -320,57 +296,10 @@ def _key(name: str) -> str:
 
 
 def _chat(prompt: str, *, config: ChatConfig, key: str) -> ChatResult:
-  body = json.dumps(
-    {
-      "model": config.model,
-      "messages": [{"role": "user", "content": prompt}],
-      "temperature": config.temperature,
-      "max_tokens": config.max_tokens,
-    }
-  ).encode()
-  request = urllib.request.Request(
-    f"{config.base_url}/chat/completions",
-    data=body,
-    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-    method="POST",
-  )
   try:
-    opener = urllib.request.build_opener(_NoRedirect)
-    with opener.open(request, timeout=config.timeout) as response:
-      payload = response.read(10_000_001)
-  except urllib.error.HTTPError as exc:
-    raise QAError(f"chat_http_error:{exc.code}") from exc
-  except OSError as exc:
-    raise QAError(f"chat_request_failed:{type(exc).__name__}") from exc
-  if len(payload) > 10_000_000:
-    raise QAError("chat_response_too_large")
-  try:
-    value = json.loads(payload)
-  except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-    raise QAError("chat_response_invalid") from exc
-  return _chat_result(value)
-
-
-def _chat_result(value: Any) -> ChatResult:
-  if not isinstance(value, dict) or not isinstance(value.get("choices"), list) or not value["choices"]:
-    raise QAError("chat_response_invalid")
-  choice = value["choices"][0]
-  if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
-    raise QAError("chat_response_invalid")
-  content = choice["message"].get("content")
-  model = value.get("model")
-  if not isinstance(content, str) or not content.strip() or not isinstance(model, str) or not model.strip():
-    raise QAError("chat_response_invalid")
-  usage = value.get("usage")
-  if usage is None:
-    tokens = (None, None, None)
-  elif isinstance(usage, dict):
-    tokens = tuple(_optional_count(usage.get(name)) for name in ("prompt_tokens", "completion_tokens", "total_tokens"))
-    if tokens[2] is not None and any(count is not None and count > tokens[2] for count in tokens[:2]):
-      raise QAError("chat_usage_invalid")
-  else:
-    raise QAError("chat_usage_invalid")
-  return ChatResult(content.strip(), model.strip(), *tokens)
+    return chat_model.complete(prompt, config=config, api_key=key)
+  except chat_model.ModelError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _reader_prompt(context: Context) -> str:
@@ -707,7 +636,7 @@ def _run_receipt(
   scores: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   semantic = {
-    "schema": f"agos-memory-lab-{kind}-v2",
+    "schema": f"agos-memory-lab-{kind}-v3",
     "benchmark_revision": longmem._BENCHMARK_REVISION,
     "source": source,
     "config": {
@@ -836,7 +765,14 @@ def _reserved_cost(prompt: str, *, config: ChatConfig) -> float:
 
 def _request_value(config: ChatConfig) -> dict[str, Any]:
   return {
+    "adapter": {
+      "api": chat_model.API,
+      "openai": chat_model.OPENAI_VERSION,
+      "pydantic_ai": chat_model.PYDANTIC_AI_VERSION,
+    },
+    "provider": config.provider,
     "base_url": config.base_url,
+    "api_version": config.api_version,
     "model": config.model,
     "temperature": config.temperature,
     "max_tokens": config.max_tokens,
@@ -978,14 +914,6 @@ def _receipt_path(path: Path) -> Path:
 
 def _pending_path(path: Path) -> Path:
   return path.with_suffix(f"{path.suffix}.pending.json")
-
-
-def _optional_count(value: Any) -> int | None:
-  if value is None:
-    return None
-  if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-    raise QAError("chat_usage_invalid")
-  return value
 
 
 def _string(value: Any, *, error: str, empty: bool = False) -> str:
