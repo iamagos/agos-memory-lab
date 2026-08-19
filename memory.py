@@ -80,10 +80,63 @@ class ExtractorRow:
 
 
 @dataclass(frozen=True, slots=True)
+class Source:
+  source_id: str
+  date: str
+  at: datetime
+  content: str
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCase:
   case_id: str
   cutoff: datetime
-  sessions: tuple[longmem.Session, ...]
+  sessions: tuple[Source, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Record:
+  record_id: str
+  case_id: str
+  kind: str
+  text: str
+  confidence: float
+  expires_at: datetime | None
+  source_ref: str
+  source_date: str
+  source: SourceDependency
+
+
+@dataclass(frozen=True, slots=True)
+class Artifact:
+  artifact_id: str
+  run_id: str
+  sha256: str
+  kernel: str
+  benchmark_repository: str
+  benchmark_revision: str
+  dataset_repository: str
+  dataset_revision: str
+  dataset_sha256: str
+  dataset_size: int
+  extractor_name: str
+  extractor_revision: str
+  extractor_config_json: str
+  records: tuple[Record, ...]
+
+  @property
+  def identity(self) -> dict[str, Any]:
+    return {
+      "artifact_id": self.artifact_id,
+      "compiler_run_id": self.run_id,
+      "sha256": self.sha256,
+      "kernel": self.kernel,
+      "extractor": {
+        "name": self.extractor_name,
+        "revision": self.extractor_revision,
+        "config": json.loads(self.extractor_config_json),
+      },
+    }
 
 
 class MemoryCompileError(Exception):
@@ -101,6 +154,8 @@ def main() -> None:
       _sources(longmem._load(source["path"])),
       dataset_repository=source["repository"],
       dataset_revision=source["revision"],
+      benchmark_repository=longmem._BENCHMARK_REPOSITORY,
+      benchmark_revision=longmem._BENCHMARK_REVISION,
       extractor=extractor,
     )
     receipt = _receipt(source=source, extractor=extractor, artifact=artifact)
@@ -112,6 +167,7 @@ def main() -> None:
           "artifact_id": receipt["artifact"]["artifact_id"],
           "out": str(out),
           "run_id": receipt["run_id"],
+          "sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
           "summary": receipt["artifact"]["summary"],
         },
         indent=2,
@@ -136,12 +192,378 @@ def _parser() -> argparse.ArgumentParser:
   return parser
 
 
-def _sources(cases: tuple[longmem.Case, ...]) -> tuple[SourceCase, ...]:
+def load(path: Path, *, sha256: str) -> Artifact:
+  expected = _sha256(sha256, error="memory_artifact_sha256_invalid")
+  try:
+    raw = path.read_bytes()
+  except OSError as exc:
+    raise MemoryCompileError(f"memory_artifact_read_failed:{exc}") from exc
+  actual = hashlib.sha256(raw).hexdigest()
+  if actual != expected:
+    raise MemoryCompileError("memory_artifact_sha256_mismatch")
+  try:
+    value = json.loads(raw, parse_constant=_invalid_constant)
+  except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+    raise MemoryCompileError("memory_artifact_json_invalid") from exc
+  receipt = _object(
+    value,
+    keys={"schema", "inputs", "artifact", "run_id", "receipt_sha256"},
+    error="memory_artifact_receipt_invalid",
+  )
+  if receipt["schema"] != "agos-memory-lab-memory-compile-v1":
+    raise MemoryCompileError("memory_artifact_receipt_invalid")
+  receipt_sha256 = _sha256(
+    receipt["receipt_sha256"],
+    error="memory_artifact_receipt_digest_invalid",
+  )
+  receipt_body = {key: item for key, item in receipt.items() if key != "receipt_sha256"}
+  if receipt_sha256 != _digest(receipt_body):
+    raise MemoryCompileError("memory_artifact_receipt_digest_mismatch")
+  run_id = _sha256(receipt["run_id"], error="memory_artifact_run_identity_invalid")
+  semantic = {key: item for key, item in receipt.items() if key not in {"receipt_sha256", "run_id"}}
+  if run_id != _digest(semantic):
+    raise MemoryCompileError("memory_artifact_run_identity_mismatch")
+  try:
+    return _artifact(receipt, sha256=actual)
+  except MemoryCompileError:
+    raise
+  except ValueError as exc:
+    raise MemoryCompileError("memory_artifact_value_invalid") from exc
+
+
+def _artifact(receipt: dict[str, Any], *, sha256: str) -> Artifact:
+  inputs = _object(
+    receipt["inputs"],
+    keys={"dataset", "extractor"},
+    error="memory_artifact_inputs_invalid",
+  )
+  dataset_input = _object(
+    inputs["dataset"],
+    keys={"repository", "revision", "sha256", "size"},
+    error="memory_artifact_dataset_invalid",
+  )
+  extractor_input = _object(
+    inputs["extractor"],
+    keys={"sha256", "size"},
+    error="memory_artifact_extractor_invalid",
+  )
+  _sha256(dataset_input["sha256"], error="memory_artifact_dataset_invalid")
+  _size(dataset_input["size"], error="memory_artifact_dataset_invalid")
+  _sha256(extractor_input["sha256"], error="memory_artifact_extractor_invalid")
+  _size(extractor_input["size"], error="memory_artifact_extractor_invalid")
+
+  artifact = _object(
+    receipt["artifact"],
+    keys={
+      "schema",
+      "kernel",
+      "benchmark",
+      "dataset",
+      "extractor",
+      "rules",
+      "summary",
+      "cases",
+      "artifact_id",
+    },
+    error="memory_artifact_invalid",
+  )
+  if artifact["schema"] != _SCHEMA:
+    raise MemoryCompileError("memory_artifact_invalid")
+  artifact_id = _sha256(artifact["artifact_id"], error="memory_artifact_identity_invalid")
+  artifact_body = {key: item for key, item in artifact.items() if key != "artifact_id"}
+  if artifact_id != _digest(artifact_body):
+    raise MemoryCompileError("memory_artifact_identity_mismatch")
+  kernel = _text(artifact["kernel"], error="memory_artifact_kernel_invalid")
+  benchmark = _object(
+    artifact["benchmark"],
+    keys={"repository", "revision"},
+    error="memory_artifact_benchmark_invalid",
+  )
+  benchmark_repository = _text(
+    benchmark["repository"],
+    error="memory_artifact_benchmark_invalid",
+  )
+  benchmark_revision = _text(
+    benchmark["revision"],
+    error="memory_artifact_benchmark_invalid",
+  )
+  dataset = _object(
+    artifact["dataset"],
+    keys={"repository", "revision"},
+    error="memory_artifact_dataset_invalid",
+  )
+  repository = _text(dataset["repository"], error="memory_artifact_dataset_invalid")
+  revision = _text(dataset["revision"], error="memory_artifact_dataset_invalid")
+  if dataset_input["repository"] != repository or dataset_input["revision"] != revision:
+    raise MemoryCompileError("memory_artifact_dataset_mismatch")
+  extractor = _extractor_identity(artifact["extractor"])
+  records = _records(
+    artifact["cases"],
+    extractor=extractor,
+    dataset_repository=repository,
+    dataset_revision=revision,
+  )
+  summary = _object(
+    artifact["summary"],
+    keys={"cases", "proposals", "outcomes", "active_records"},
+    error="memory_artifact_summary_invalid",
+  )
+  if _count(summary["active_records"], error="memory_artifact_summary_invalid") != len(records):
+    raise MemoryCompileError("memory_artifact_summary_mismatch")
+  return Artifact(
+    artifact_id=artifact_id,
+    run_id=receipt["run_id"],
+    sha256=sha256,
+    kernel=kernel,
+    benchmark_repository=benchmark_repository,
+    benchmark_revision=benchmark_revision,
+    dataset_repository=repository,
+    dataset_revision=revision,
+    dataset_sha256=dataset_input["sha256"],
+    dataset_size=dataset_input["size"],
+    extractor_name=extractor["name"],
+    extractor_revision=extractor["revision"],
+    extractor_config_json=_canonical(extractor["config"]).decode(),
+    records=records,
+  )
+
+
+def _extractor_identity(value: Any) -> dict[str, Any]:
+  extractor = _object(
+    value,
+    keys={"schema", "name", "revision", "config"},
+    error="memory_artifact_extractor_invalid",
+  )
+  if extractor["schema"] != _EXTRACTOR_SCHEMA or not isinstance(extractor["config"], dict):
+    raise MemoryCompileError("memory_artifact_extractor_invalid")
+  _text(extractor["name"], error="memory_artifact_extractor_invalid")
+  _text(extractor["revision"], error="memory_artifact_extractor_invalid")
+  _canonical(extractor["config"])
+  return extractor
+
+
+def _records(
+  values: Any,
+  *,
+  extractor: dict[str, Any],
+  dataset_repository: str,
+  dataset_revision: str,
+) -> tuple[Record, ...]:
+  if not isinstance(values, list):
+    raise MemoryCompileError("memory_artifact_cases_invalid")
+  case_ids: list[str] = []
+  records: list[Record] = []
+  seen: set[str] = set()
+  for value in values:
+    case = _object(
+      value,
+      keys={"case_id", "cutoff", "decisions", "active_record_ids"},
+      error="memory_artifact_case_invalid",
+    )
+    case_id = _text(case["case_id"], error="memory_artifact_case_invalid")
+    case_ids.append(case_id)
+    if _instant(case["cutoff"]) is None:
+      raise MemoryCompileError("memory_artifact_case_cutoff_invalid")
+    decisions = case["decisions"]
+    if not isinstance(decisions, list):
+      raise MemoryCompileError("memory_artifact_decisions_invalid")
+    accepted: dict[str, dict[str, Any]] = {}
+    for decision in decisions:
+      if not isinstance(decision, dict) or decision.get("outcome") not in {"accept", "replace", "reject"}:
+        raise MemoryCompileError("memory_artifact_decision_invalid")
+      record_id = decision.get("record_id")
+      if decision["outcome"] != "reject":
+        record_id = _text(record_id, error="memory_artifact_record_identity_invalid")
+        if record_id in accepted:
+          raise MemoryCompileError("memory_artifact_record_identity_duplicated")
+        accepted[record_id] = decision
+    active = case["active_record_ids"]
+    if not isinstance(active, list) or any(not isinstance(record_id, str) for record_id in active):
+      raise MemoryCompileError("memory_artifact_active_records_invalid")
+    if active != sorted(set(active)):
+      raise MemoryCompileError("memory_artifact_active_records_invalid")
+    for record_id in active:
+      decision = accepted.get(record_id)
+      if decision is None or record_id in seen:
+        raise MemoryCompileError("memory_artifact_active_record_missing")
+      seen.add(record_id)
+      records.append(
+        _record(
+          case_id=case_id,
+          decision=decision,
+          extractor=extractor,
+          dataset_repository=dataset_repository,
+          dataset_revision=dataset_revision,
+        )
+      )
+  if case_ids != sorted(set(case_ids)):
+    raise MemoryCompileError("memory_artifact_case_identity_invalid")
+  return tuple(records)
+
+
+def _record(
+  *,
+  case_id: str,
+  decision: dict[str, Any],
+  extractor: dict[str, Any],
+  dataset_repository: str,
+  dataset_revision: str,
+) -> Record:
+  outcome = decision["outcome"]
+  keys = {
+    "proposal_id",
+    "ordinal",
+    "source",
+    "proposal",
+    "outcome",
+    "expires_at",
+    "record_id",
+  }
+  if outcome == "replace":
+    keys.add("replaced_record_ids")
+  if set(decision) != keys:
+    raise MemoryCompileError("memory_artifact_record_invalid")
+  ordinal = decision["ordinal"]
+  if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
+    raise MemoryCompileError("memory_artifact_record_invalid")
+  _text(decision["proposal_id"], error="memory_artifact_record_invalid")
+  record_id = _text(decision["record_id"], error="memory_artifact_record_identity_invalid")
+  record = {key: item for key, item in decision.items() if key not in {"proposal_id", "record_id"}}
+  expected_id = "memory:" + _digest(
+    {
+      "schema": "agos-memory-lab-record-v1",
+      "extractor": extractor,
+      "decision": record,
+    }
+  )
+  if record_id != expected_id:
+    raise MemoryCompileError("memory_artifact_record_identity_mismatch")
+  source_ref, source_date, source = _record_source(
+    decision["source"],
+    case_id=case_id,
+    dataset_repository=dataset_repository,
+    dataset_revision=dataset_revision,
+  )
+  proposal = _record_proposal(decision["proposal"], case_id=case_id, source_ref=source_ref)
+  replaced = decision.get("replaced_record_ids", [])
+  if not isinstance(replaced, list) or replaced != sorted(set(replaced)):
+    raise MemoryCompileError("memory_artifact_replacement_invalid")
+  if (outcome == "accept" and proposal.supersedes) or (
+    outcome == "replace" and tuple(replaced) != proposal.supersedes
+  ):
+    raise MemoryCompileError("memory_artifact_replacement_mismatch")
+  return Record(
+    record_id=record_id,
+    case_id=case_id,
+    kind=proposal.kind,
+    text=proposal.text,
+    confidence=proposal.confidence,
+    expires_at=_instant(decision["expires_at"]),
+    source_ref=source_ref,
+    source_date=source_date,
+    source=source,
+  )
+
+
+def _record_source(
+  value: Any,
+  *,
+  case_id: str,
+  dataset_repository: str,
+  dataset_revision: str,
+) -> tuple[str, str, SourceDependency]:
+  source = _object(
+    value,
+    keys={"ref", "owner", "revision", "fragment", "kind", "date", "digest"},
+    error="memory_artifact_source_invalid",
+  )
+  source_ref = _text(source["ref"], error="memory_artifact_source_invalid")
+  body = {key: item for key, item in source.items() if key != "ref"}
+  if source_ref != f"source:{_digest(body)}":
+    raise MemoryCompileError("memory_artifact_source_identity_mismatch")
+  dependency = SourceDependency(
+    owner=source["owner"],
+    revision=source["revision"],
+    fragment=source["fragment"],
+    kind=source["kind"],
+    digest=source["digest"],
+  )
+  if (
+    dependency.owner != f"{dataset_repository}#{case_id}"
+    or dependency.revision != dataset_revision
+    or dependency.kind != "session"
+  ):
+    raise MemoryCompileError("memory_artifact_source_scope_mismatch")
+  return source_ref, _text(source["date"], error="memory_artifact_source_invalid"), dependency
+
+
+def _record_proposal(value: Any, *, case_id: str, source_ref: str) -> Proposal:
+  proposal = _object(
+    value,
+    keys={
+      "partition",
+      "kind",
+      "text",
+      "confidence",
+      "source_refs",
+      "supersedes",
+      "expires_days",
+    },
+    error="memory_artifact_proposal_invalid",
+  )
+  partition = _object(
+    proposal["partition"],
+    keys={"label", "key"},
+    error="memory_artifact_proposal_invalid",
+  )
+  if partition != {"label": "case", "key": case_id}:
+    raise MemoryCompileError("memory_artifact_proposal_scope_mismatch")
+  source_refs = proposal["source_refs"]
+  supersedes = proposal["supersedes"]
+  if source_refs != [source_ref] or not isinstance(supersedes, list):
+    raise MemoryCompileError("memory_artifact_proposal_source_mismatch")
+  result = Proposal(
+    partition=Partition("case", case_id),
+    kind=proposal["kind"],
+    text=proposal["text"],
+    confidence=proposal["confidence"],
+    source_refs=tuple(source_refs),
+    supersedes=tuple(supersedes),
+    expires_days=proposal["expires_days"],
+  )
+  if result.text != " ".join(result.text.split()):
+    raise MemoryCompileError("memory_artifact_proposal_not_normalized")
+  return result
+
+
+def _instant(value: Any) -> datetime | None:
+  if value is None:
+    return None
+  if not isinstance(value, str):
+    raise MemoryCompileError("memory_artifact_expiry_invalid")
+  try:
+    result = datetime.fromisoformat(value)
+  except ValueError as exc:
+    raise MemoryCompileError("memory_artifact_expiry_invalid") from exc
+  if result.tzinfo is None or result.utcoffset() is None:
+    raise MemoryCompileError("memory_artifact_expiry_invalid")
+  return result
+
+
+def _sources(cases: tuple[Any, ...]) -> tuple[SourceCase, ...]:
   return tuple(
     SourceCase(
       case_id=case.question_id,
       cutoff=case.asked_at,
-      sessions=case.sessions,
+      sessions=tuple(
+        Source(
+          source_id=session.source_id,
+          date=session.date,
+          at=session.at,
+          content=session.content,
+        )
+        for session in case.sessions
+      ),
     )
     for case in cases
   )
@@ -152,6 +574,8 @@ def _compile(
   *,
   dataset_repository: str,
   dataset_revision: str,
+  benchmark_repository: str,
+  benchmark_revision: str,
   extractor: Extractor,
 ) -> dict[str, Any]:
   by_case = {case.case_id: case for case in cases}
@@ -247,8 +671,8 @@ def _compile(
     "schema": _SCHEMA,
     "kernel": version("agos-memory"),
     "benchmark": {
-      "repository": longmem._BENCHMARK_REPOSITORY,
-      "revision": longmem._BENCHMARK_REVISION,
+      "repository": benchmark_repository,
+      "revision": benchmark_revision,
     },
     "dataset": {
       "repository": dataset_repository,
@@ -270,7 +694,7 @@ def _validate_rows(
   rows: tuple[ExtractorRow, ...],
   *,
   by_case: dict[str, SourceCase],
-  sessions_by_case: dict[str, dict[str, longmem.Session]],
+  sessions_by_case: dict[str, dict[str, Source]],
 ) -> None:
   if not rows:
     raise MemoryCompileError("extractor_proposals_empty")
@@ -346,7 +770,7 @@ def _source(
   dataset_repository: str,
   dataset_revision: str,
   row: ExtractorRow,
-  session: longmem.Session,
+  session: Source,
 ) -> dict[str, str]:
   dependency = SourceDependency(
     owner=f"{dataset_repository}#{case_id}",
@@ -564,6 +988,24 @@ def _text(value: Any, *, error: str) -> str:
 
 def _string(value: Any, *, error: str) -> str:
   if not isinstance(value, str):
+    raise MemoryCompileError(error)
+  return value
+
+
+def _object(value: Any, *, keys: set[str], error: str) -> dict[str, Any]:
+  if not isinstance(value, dict) or set(value) != keys:
+    raise MemoryCompileError(error)
+  return value
+
+
+def _size(value: Any, *, error: str) -> int:
+  if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+    raise MemoryCompileError(error)
+  return value
+
+
+def _count(value: Any, *, error: str) -> int:
+  if not isinstance(value, int) or isinstance(value, bool) or value < 0:
     raise MemoryCompileError(error)
   return value
 

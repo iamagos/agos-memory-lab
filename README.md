@@ -39,15 +39,22 @@ pins the benchmark code at
 `98d7416c24c778c2fee6e6f3006e7a073259d48f`.
 
 ```text
-pinned sessions
-  -> raw retrieval                    BM25 or local Qdrant
-  -> ranked occurrence routes
-  -> agos_memory.select()             order, limits, omissions
-  -> bounded dated-session context
-  -> direct reader                    hypothesis
-  -> pinned official judge            QA score
-  -> content-addressed receipts       IDs and hashes, never corpus text
+pinned sessions -----------------------------> raw retrieval
+       `-> frozen extraction -> admit -> artifact -> memory retrieval
+                                                   |
+                          BM25 or local Qdrant routes
+                                                   v
+                   agos_memory.select() -> bounded context
+                              memory path -> exact support() reopen
+                                                   v
+                         direct reader -> official judge
+                                                   v
+                    run receipts: IDs/hashes, no selected text
 ```
+
+The raw-session path remains the unchanged control. Both paths use the same
+retriever, selection limits, reader, and judge; only the candidate text and its
+source-linked governance differ.
 
 Fetch and verify LongMemEval-S, then run the credential-free BM25 baseline:
 
@@ -200,7 +207,8 @@ uv run python memory.py \
   --sha256 9df07a9961774981e0ed9a0685f02f284063cf8155a3cec18b55c18f0eb67876 \
   --revision fixture-v1 \
   --extractor tests/extractor.jsonl \
-  --extractor-sha256 cdd5ddff0f7a1ddd66d4f2a5d8a4a99777000322e4a0b7b1992c6fc50ff026a3
+  --extractor-sha256 cdd5ddff0f7a1ddd66d4f2a5d8a4a99777000322e4a0b7b1992c6fc50ff026a3 \
+  --out runs/fixture-memory.json
 ```
 
 Every proposal binds one case, session occurrence, date, digest, extractor
@@ -209,6 +217,30 @@ every accept, reject, and replacement, and keeps replacement as lineage. The
 pure compiler does not receive benchmark questions, answers, answer-session
 IDs, or abstention labels. Retention, retrieval, reader calls, and judging
 remain separate stages.
+
+The compiler prints the artifact file SHA-256. Use that exact value to run the
+memory path:
+
+```bash
+uv run python longmem.py run \
+  --file tests/fixture.json \
+  --sha256 9df07a9961774981e0ed9a0685f02f284063cf8155a3cec18b55c18f0eb67876 \
+  --revision fixture-v1 \
+  --source memories \
+  --artifact runs/fixture-memory.json \
+  --artifact-sha256 ARTIFACT_SHA256 \
+  --retriever lexical \
+  --contexts runs/fixture-memory-contexts.jsonl
+```
+
+The runner validates the artifact hashes, identities, and active records, then
+binds them to the exact benchmark and dataset. Retrieval sees only active
+admitted memory text. The stateless
+experiment gives `retain()` the source time, optional expiry, and zero prior
+exposures or attributed uses; it does not claim durable usage history. The
+retriever supplies routes, `select()` owns order and bounds, and every selected
+record must pass `support()` against its exact pinned session before its text is
+rendered. Gold labels enter only the metrics stage.
 
 ## Boundary
 
