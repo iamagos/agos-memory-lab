@@ -21,12 +21,18 @@ from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
 from statistics import fmean
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from agos_memory.retain import retain
 from agos_memory.select import select
-from agos_memory.support import source_digest
+from agos_memory.support import source_digest, support
 from agos_memory.types import (
+  Current,
+  Omit,
   Omitted,
+  ReopenedSource,
+  RetentionPolicy,
+  RetentionState,
   Selected,
   SelectionItem,
   SelectionLimits,
@@ -35,6 +41,9 @@ from agos_memory.types import (
   SelectionRoute,
 )
 from rank_bm25 import BM25Okapi
+
+if TYPE_CHECKING:
+  import memory
 
 
 _DATASET_REPOSITORY = "xiaowu0162/longmemeval-cleaned"
@@ -55,6 +64,7 @@ _DATASETS = {
 }
 _CUTS = (1, 3, 5, 10, 50)
 _Retriever = Literal["none", "recent", "full", "lexical", "oracle", "qdrant-dense", "qdrant-hybrid"]
+_Source = Literal["sessions", "memories"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +91,20 @@ class Case:
 @dataclass(frozen=True, slots=True)
 class Hit:
   source_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+  source_id: str
+  benchmark_id: str
+  text: str
+  at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Memory:
+  record: memory.Record
+  session: Session
 
 
 class LongMemError(Exception):
@@ -116,6 +140,9 @@ def _parser() -> argparse.ArgumentParser:
   run.add_argument("--sha256", help="Required SHA-256 for --file.")
   run.add_argument("--revision", help="Required immutable identity for --file.")
   run.add_argument("--data", type=Path, default=Path("data"))
+  run.add_argument("--source", choices=_Source.__args__, default="sessions")
+  run.add_argument("--artifact", type=Path, help="Required source-linked artifact for memories.")
+  run.add_argument("--artifact-sha256", help="Required artifact SHA-256 for memories.")
   run.add_argument("--retriever", choices=_Retriever.__args__, default="lexical")
   run.add_argument("--offset", type=int, default=0, help="First corpus case; defaults to 0.")
   run.add_argument("--limit", type=int, default=0, help="Number of cases; 0 means all.")
@@ -168,10 +195,19 @@ def _run(args: argparse.Namespace) -> None:
   loaded = time.perf_counter()
   source = _source(args)
   _verify_file(source["path"], sha256=source["sha256"], size=source["size"])
-  cases = _load(source["path"])
-  cases = cases[args.offset : None if args.limit == 0 else args.offset + args.limit]
+  all_cases = _load(source["path"])
+  artifact, memories_by_case = _load_memories(args, source=source, cases=all_cases)
+  cases = all_cases[args.offset : None if args.limit == 0 else args.offset + args.limit]
   if not cases:
     raise LongMemError("dataset_selection_empty")
+  entries_by_case = {
+    case.question_id: (
+      _session_entries(case)
+      if artifact is None
+      else _memory_entries(memories_by_case.get(case.question_id, ()))
+    )
+    for case in cases
+  }
   load_seconds = time.perf_counter() - loaded
 
   qdrant = None
@@ -180,48 +216,111 @@ def _run(args: argparse.Namespace) -> None:
     indexed = time.perf_counter()
     qdrant = _Qdrant(
       cases,
+      entries_by_case,
       hybrid=args.retriever == "qdrant-hybrid",
       model=args.model,
       cache=args.cache,
+      text="user turns" if artifact is None else "memory text",
     )
     index_seconds = time.perf_counter() - indexed
 
   query_seconds = 0.0
   kernel_seconds = 0.0
-  retriever_identity = qdrant.identity if qdrant is not None else _retriever_identity(args.retriever)
+  retriever_identity = (
+    qdrant.identity
+    if qdrant is not None
+    else _retriever_identity(
+      args.retriever,
+      text="user turns" if artifact is None else "memory text",
+    )
+  )
   results: list[dict[str, Any]] = []
   contexts: list[dict[str, Any]] = []
   try:
     for case in cases:
+      entries = entries_by_case[case.question_id]
       queried = time.perf_counter()
       hits = (
-        qdrant.retrieve(case, limit=min(args.candidates, len(case.sessions)))
+        qdrant.retrieve(case, entries, limit=min(args.candidates, len(entries)))
         if qdrant is not None
-        else _retrieve(case, retriever=args.retriever, limit=args.candidates)
+        else _retrieve_entries(
+          case,
+          entries,
+          retriever=args.retriever,
+          limit=args.candidates,
+        )
       )
       query_seconds += time.perf_counter() - queried
 
       governed = time.perf_counter()
-      kernel = _govern(
-        case,
-        hits,
-        retriever=args.retriever,
-        top_k=args.top_k,
-        chars=args.chars,
-        lexical_weight=args.lexical_weight,
-      )
+      if artifact is None:
+        kernel = _govern(
+          case,
+          hits,
+          retriever=args.retriever,
+          top_k=args.top_k,
+          chars=args.chars,
+          lexical_weight=args.lexical_weight,
+        )
+      else:
+        kernel = _govern_memory(
+          case,
+          memories_by_case.get(case.question_id, ()),
+          hits,
+          artifact=artifact,
+          source=source,
+          retriever=args.retriever,
+          top_k=args.top_k,
+          chars=args.chars,
+          lexical_weight=args.lexical_weight,
+        )
       kernel_seconds += time.perf_counter() - governed
       raw_ids = tuple(hit.source_id for hit in hits)
-      raw_benchmark_ids = tuple(_benchmark_id(case, source_id) for source_id in raw_ids)
-      selected_benchmark_ids = tuple(
-        _benchmark_id(case, source_id) for source_id in kernel["selected_occurrence_ids"]
-      )
+      if artifact is None:
+        raw_benchmark_ids = tuple(_benchmark_id(case, source_id) for source_id in raw_ids)
+        selected_ids = kernel["selected_occurrence_ids"]
+        selected_benchmark_ids = tuple(
+          _benchmark_id(case, source_id) for source_id in selected_ids
+        )
+        context_ids = {"selected_occurrence_ids": selected_ids}
+        result_ids = {
+          "retrieved_occurrence_ids": raw_ids,
+          "retrieved_session_ids": raw_benchmark_ids,
+          "selected_occurrence_ids": selected_ids,
+          "selected_session_ids": selected_benchmark_ids,
+        }
+      else:
+        by_id = {
+          value.record.record_id: value
+          for value in memories_by_case.get(case.question_id, ())
+        }
+        selected_ids = kernel["selected_memory_ids"]
+        raw_sources = tuple(by_id[record_id].session.source_id for record_id in raw_ids)
+        selected_sources = tuple(by_id[record_id].session.source_id for record_id in selected_ids)
+        raw_benchmark_ids = _unique(
+          tuple(by_id[record_id].session.benchmark_id for record_id in raw_ids)
+        )
+        selected_benchmark_ids = _unique(
+          tuple(by_id[record_id].session.benchmark_id for record_id in selected_ids)
+        )
+        context_ids = {
+          "selected_memory_ids": selected_ids,
+          "selected_source_occurrence_ids": selected_sources,
+        }
+        result_ids = {
+          "retrieved_memory_ids": raw_ids,
+          "retrieved_source_occurrence_ids": raw_sources,
+          "retrieved_session_ids": raw_benchmark_ids,
+          "selected_memory_ids": selected_ids,
+          "selected_source_occurrence_ids": selected_sources,
+          "selected_session_ids": selected_benchmark_ids,
+        }
       contexts.append(
         {
           "question_id": case.question_id,
           "question": case.question,
           "question_date": case.question_date,
-          "selected_occurrence_ids": kernel["selected_occurrence_ids"],
+          **context_ids,
           "context": kernel["content"],
           "context_sha256": kernel["receipt"]["content_sha256"],
         }
@@ -232,10 +331,7 @@ def _run(args: argparse.Namespace) -> None:
           "question_type": case.question_type,
           "abstention": case.question_id.endswith("_abs"),
           "answer_session_ids": case.answer_session_ids,
-          "retrieved_occurrence_ids": raw_ids,
-          "retrieved_session_ids": raw_benchmark_ids,
-          "selected_occurrence_ids": kernel["selected_occurrence_ids"],
-          "selected_session_ids": selected_benchmark_ids,
+          **result_ids,
           "metrics": {
             "retrieval": _metrics(raw_benchmark_ids, case.answer_session_ids),
             "kernel": _metrics(selected_benchmark_ids, case.answer_session_ids),
@@ -247,6 +343,18 @@ def _run(args: argparse.Namespace) -> None:
     if qdrant is not None:
       qdrant.close()
 
+  config = {
+    "retriever": args.retriever,
+    "offset": args.offset,
+    "limit": len(cases),
+    "candidates": args.candidates,
+    "top_k": args.top_k,
+    "chars": args.chars,
+    "lexical_weight": args.lexical_weight,
+    "retriever_identity": retriever_identity,
+  }
+  if artifact is not None:
+    config = {**config, "source": "memories", "artifact": artifact.identity}
   semantic = {
     "schema": "agos-memory-lab-longmem-v1",
     "benchmark": {
@@ -261,16 +369,7 @@ def _run(args: argparse.Namespace) -> None:
       "size": source["size"],
     },
     "kernel": version("agos-memory"),
-    "config": {
-      "retriever": args.retriever,
-      "offset": args.offset,
-      "limit": len(cases),
-      "candidates": args.candidates,
-      "top_k": args.top_k,
-      "chars": args.chars,
-      "lexical_weight": args.lexical_weight,
-      "retriever_identity": retriever_identity,
-    },
+    "config": config,
     "summary": _summary(results),
     "cases": results,
   }
@@ -327,35 +426,142 @@ def _source(args: argparse.Namespace) -> dict[str, Any]:
   }
 
 
+def _load_memories(
+  args: argparse.Namespace,
+  *,
+  source: dict[str, Any],
+  cases: tuple[Case, ...],
+) -> tuple[memory.Artifact | None, dict[str, tuple[Memory, ...]]]:
+  import memory
+
+  if args.source == "sessions":
+    return None, {}
+  try:
+    artifact = memory.load(args.artifact, sha256=args.artifact_sha256)
+  except memory.MemoryCompileError as exc:
+    raise LongMemError(str(exc)) from exc
+  if (
+    artifact.benchmark_repository != _BENCHMARK_REPOSITORY
+    or artifact.benchmark_revision != _BENCHMARK_REVISION
+  ):
+    raise LongMemError("memory_artifact_benchmark_mismatch")
+  if (
+    artifact.dataset_repository != source["repository"]
+    or artifact.dataset_revision != source["revision"]
+    or artifact.dataset_sha256 != source["sha256"]
+    or artifact.dataset_size != source["size"]
+  ):
+    raise LongMemError("memory_artifact_dataset_mismatch")
+
+  by_case = {case.question_id: case for case in cases}
+  sessions_by_case = {
+    case.question_id: {session.source_id: session for session in case.sessions}
+    for case in cases
+  }
+  all_sources = {
+    source_id
+    for sessions in sessions_by_case.values()
+    for source_id in sessions
+  }
+  grouped: dict[str, list[Memory]] = {}
+  for record in artifact.records:
+    case = by_case.get(record.case_id)
+    if case is None:
+      raise LongMemError("memory_artifact_case_missing")
+    session = sessions_by_case[record.case_id].get(record.source.fragment)
+    if session is None:
+      reason = (
+        "memory_artifact_source_scope_mismatch"
+        if record.source.fragment in all_sources
+        else "memory_artifact_source_missing"
+      )
+      raise LongMemError(reason)
+    if record.source_date != session.date:
+      raise LongMemError("memory_artifact_source_date_mismatch")
+    if record.source.digest != source_digest(session.content):
+      raise LongMemError("memory_artifact_source_digest_mismatch")
+    grouped.setdefault(record.case_id, []).append(Memory(record=record, session=session))
+  return artifact, {
+    case_id: tuple(sorted(values, key=lambda value: value.record.record_id))
+    for case_id, values in grouped.items()
+  }
+
+
+def _session_entries(case: Case) -> tuple[Entry, ...]:
+  return tuple(
+    Entry(
+      source_id=session.source_id,
+      benchmark_id=session.benchmark_id,
+      text=session.text,
+      at=session.at,
+    )
+    for session in case.sessions
+  )
+
+
+def _memory_entries(values: tuple[Memory, ...]) -> tuple[Entry, ...]:
+  return tuple(
+    Entry(
+      source_id=value.record.record_id,
+      benchmark_id=value.session.benchmark_id,
+      text=value.record.text,
+      at=value.session.at,
+    )
+    for value in values
+  )
+
+
 def _retrieve(case: Case, *, retriever: _Retriever, limit: int) -> tuple[Hit, ...]:
-  sessions = case.sessions
-  if retriever == "none":
+  return _retrieve_entries(
+    case,
+    _session_entries(case),
+    retriever=retriever,
+    limit=limit,
+  )
+
+
+def _retrieve_entries(
+  case: Case,
+  entries: tuple[Entry, ...],
+  *,
+  retriever: _Retriever,
+  limit: int,
+) -> tuple[Hit, ...]:
+  if not entries or retriever == "none":
     return ()
   if retriever == "recent":
-    ordered = sorted(enumerate(sessions), key=lambda item: (-item[1].at.timestamp(), item[0]))
+    ordered = sorted(enumerate(entries), key=lambda item: (-item[1].at.timestamp(), item[0]))
   elif retriever == "full":
-    ordered = list(enumerate(sessions))
-    limit = len(sessions)
+    ordered = list(enumerate(entries))
+    limit = len(entries)
     if limit > 100:
       raise LongMemError("full_retriever_route_limit_exceeded")
   elif retriever == "lexical":
-    bm25 = BM25Okapi([session.text.split(" ") for session in sessions])
+    bm25 = BM25Okapi([entry.text.split(" ") for entry in entries])
     scores = bm25.get_scores(case.question.split(" "))
-    ordered = [(index, sessions[index]) for index in scores.argsort()[::-1]]
+    ordered = [(index, entries[index]) for index in scores.argsort()[::-1]]
   elif retriever == "oracle":
     answer = set(case.answer_session_ids)
-    ordered = sorted(enumerate(sessions), key=lambda item: (item[1].benchmark_id not in answer, item[0]))
+    ordered = sorted(enumerate(entries), key=lambda item: (item[1].benchmark_id not in answer, item[0]))
   else:
     raise LongMemError("qdrant_dependency_missing:run_with_uv_script")
-  return tuple(Hit(session.source_id) for _, session in ordered[:limit])
+  return tuple(Hit(entry.source_id) for _, entry in ordered[:limit])
 
 
 def _rrf(case: Case, *rankings: tuple[Hit, ...], limit: int) -> tuple[Hit, ...]:
+  return _rrf_entries(_session_entries(case), *rankings, limit=limit)
+
+
+def _rrf_entries(
+  entries: tuple[Entry, ...],
+  *rankings: tuple[Hit, ...],
+  limit: int,
+) -> tuple[Hit, ...]:
   scores: dict[str, float] = {}
   for ranking in rankings:
     for rank, hit in enumerate(ranking, start=1):
       scores[hit.source_id] = scores.get(hit.source_id, 0.0) + 1 / (60 + rank)
-  order = {session.source_id: index for index, session in enumerate(case.sessions)}
+  order = {entry.source_id: index for index, entry in enumerate(entries)}
   source_ids = sorted(scores, key=lambda source_id: (-scores[source_id], order[source_id]))
   return tuple(Hit(source_id) for source_id in source_ids[:limit])
 
@@ -434,6 +640,149 @@ def _govern(
       "outcomes": outcomes,
     },
   }
+
+
+def _govern_memory(
+  case: Case,
+  values: tuple[Memory, ...],
+  hits: tuple[Hit, ...],
+  *,
+  artifact: memory.Artifact,
+  source: dict[str, Any],
+  retriever: _Retriever,
+  top_k: int,
+  chars: int,
+  lexical_weight: int,
+) -> dict[str, Any]:
+  if any(value.record.case_id != case.question_id for value in values):
+    raise LongMemError("memory_record_scope_mismatch")
+  by_id = {value.record.record_id: value for value in values}
+  if any(hit.source_id not in by_id for hit in hits):
+    raise LongMemError("retrieval_result_scope_mismatch")
+  retained = {}
+  items = []
+  policy = RetentionPolicy()
+  for hit in hits:
+    value = by_id[hit.source_id]
+    decision = retain(
+      RetentionState(
+        updated_at=value.session.at,
+        expires_at=value.record.expires_at,
+      ),
+      policy=policy,
+      now=case.asked_at,
+    )
+    retained[hit.source_id] = decision
+    items.append(
+      SelectionItem(
+        source="memory",
+        source_id=value.record.record_id,
+        partition="case",
+        kind=value.record.kind,
+        text=value.record.text,
+        content=value.record.text,
+        confidence=value.record.confidence,
+        updated_at=value.session.at,
+        revision=artifact.artifact_id,
+        source_digest=value.record.source.digest,
+        omission="retention" if isinstance(decision, Omit) else None,
+      )
+    )
+  routes = tuple(
+    SelectionRoute(
+      source="memory",
+      source_id=hit.source_id,
+      lane=retriever,
+      rank=rank,
+      signal=retriever,
+    )
+    for rank, hit in enumerate(hits, start=1)
+  )
+  selection = select(
+    tuple(items),
+    routes=routes,
+    query=case.question,
+    limits=SelectionLimits(max_items=top_k, max_chars=chars),
+    policy=SelectionPolicy(
+      partitions=(SelectionPriority(label="case", score=0),),
+      kinds=tuple(
+        SelectionPriority(label=kind, score=0)
+        for kind in sorted({item.kind for item in items})
+      ),
+      source_order=("memory",),
+      route_order=(retriever,),
+      lexical_weight=lexical_weight,
+      route_rank_ceiling=100,
+    ),
+    now=case.asked_at,
+    include_paths=True,
+  )
+  outcomes = tuple(_outcome(outcome) for outcome in selection.outcomes)
+  selected = tuple(
+    outcome.candidate.source_id
+    for outcome in sorted(selection.selected, key=lambda item: item.rank)
+  )
+  reopened = _reopen(case, selected, by_id=by_id, source=source)
+  return {
+    "selected_memory_ids": selected,
+    "content": selection.content,
+    "receipt": {
+      "content_chars": len(selection.content),
+      "content_sha256": hashlib.sha256(selection.content.encode()).hexdigest(),
+      "source_count": selection.source_count,
+      "included_count": selection.included_count,
+      "truncated": selection.truncated,
+      "retention": tuple(
+        {
+          "record_id": hit.source_id,
+          "decision": "omit" if isinstance(retained[hit.source_id], Omit) else "retain",
+          **(
+            {"reason": retained[hit.source_id].reason}
+            if isinstance(retained[hit.source_id], Omit)
+            else {}
+          ),
+        }
+        for hit in hits
+      ),
+      "support": reopened,
+      "outcomes": outcomes,
+    },
+  }
+
+
+def _reopen(
+  case: Case,
+  record_ids: tuple[str, ...],
+  *,
+  by_id: dict[str, Memory],
+  source: dict[str, Any],
+) -> tuple[dict[str, str], ...]:
+  reopened = []
+  for record_id in record_ids:
+    value = by_id.get(record_id)
+    if value is None or value.record.case_id != case.question_id:
+      raise LongMemError("memory_record_reopen_scope_mismatch")
+    current = ReopenedSource(
+      owner=f"{source['repository']}#{case.question_id}",
+      revision=source["revision"],
+      fragment=value.session.source_id,
+      kind="session",
+      digest=source_digest(value.session.content),
+      current_revision=source["revision"],
+    )
+    decision = support(value.record.source, current)
+    if not isinstance(decision, Current):
+      raise LongMemError(f"memory_source_support_{type(decision).__name__.lower()}")
+    reopened.append(
+      {
+        "record_id": record_id,
+        "source_ref": value.record.source_ref,
+        "source_occurrence_id": value.session.source_id,
+        "source_digest": value.record.source.digest,
+        "decision": "current",
+      }
+    )
+  return tuple(reopened)
 
 
 def _outcome(outcome: Selected | Omitted) -> dict[str, Any]:
@@ -534,10 +883,12 @@ class _Qdrant:
   def __init__(
     self,
     cases: tuple[Case, ...],
+    entries_by_case: dict[str, tuple[Entry, ...]],
     *,
     hybrid: bool,
     model: str,
     cache: Path,
+    text: str,
   ) -> None:
     try:
       from fastembed import TextEmbedding
@@ -561,13 +912,18 @@ class _Qdrant:
       },
       "dense": _model_identity(self._dense),
       "fusion": (
-        {"algorithm": "rrf", "k": 60, "lexical": _retriever_identity("lexical")}
+        {"algorithm": "rrf", "k": 60, "lexical": _retriever_identity("lexical", text=text)}
         if hybrid
         else None
       ),
+      **({"text": text} if text != "user turns" else {}),
     }
 
-    rows = tuple((case.question_id, session) for case in cases for session in case.sessions)
+    rows = tuple(
+      (case.question_id, entry)
+      for case in cases
+      for entry in entries_by_case[case.question_id]
+    )
     self._client.create_collection(
       self._collection,
       vectors_config={
@@ -576,20 +932,28 @@ class _Qdrant:
     )
     for start in range(0, len(rows), 256):
       batch = rows[start : start + 256]
-      dense_vectors = self._dense.embed(session.text for _, session in batch)
+      dense_vectors = self._dense.embed(entry.text for _, entry in batch)
       points = [
         models.PointStruct(
           id=start + offset,
-          payload={"question_id": question_id, "source_id": session.source_id},
+          payload={"question_id": question_id, "source_id": entry.source_id},
           vector={"dense": vector.tolist()},
         )
-        for offset, ((question_id, session), vector) in enumerate(
+        for offset, ((question_id, entry), vector) in enumerate(
           zip(batch, dense_vectors, strict=True)
         )
       ]
       self._client.upsert(self._collection, points=points, wait=True)
 
-  def retrieve(self, case: Case, *, limit: int) -> tuple[Hit, ...]:
+  def retrieve(
+    self,
+    case: Case,
+    entries: tuple[Entry, ...],
+    *,
+    limit: int,
+  ) -> tuple[Hit, ...]:
+    if not entries:
+      return ()
     models = self._models
     dense = next(iter(self._dense.query_embed(case.question))).tolist()
     query_filter = models.Filter(
@@ -603,7 +967,7 @@ class _Qdrant:
       limit=limit,
       with_payload=["question_id", "source_id"],
     )
-    allowed = {session.source_id for session in case.sessions}
+    allowed = {entry.source_id for entry in entries}
     payloads = tuple(point.payload or {} for point in response.points)
     if any(
       payload.get("question_id") != case.question_id or payload.get("source_id") not in allowed
@@ -615,8 +979,8 @@ class _Qdrant:
       raise LongMemError("qdrant_result_identity_duplicated")
     if not self._hybrid:
       return hits
-    lexical = _retrieve(case, retriever="lexical", limit=limit)
-    return _rrf(case, hits, lexical, limit=limit)
+    lexical = _retrieve_entries(case, entries, retriever="lexical", limit=limit)
+    return _rrf_entries(entries, hits, lexical, limit=limit)
 
   def close(self) -> None:
     self._client.close()
@@ -729,6 +1093,11 @@ def _verify_file(path: Path, *, sha256: str, size: int) -> None:
 
 
 def _validate_run(args: argparse.Namespace) -> None:
+  if args.source == "memories":
+    if args.artifact is None or not args.artifact_sha256:
+      raise LongMemError("memory_artifact_identity_required")
+  elif args.artifact is not None or args.artifact_sha256 is not None:
+    raise LongMemError("memory_artifact_requires_memory_source")
   for value, error in (
     (args.offset, "offset_invalid"),
     (args.limit, "limit_invalid"),
@@ -759,6 +1128,10 @@ def _benchmark_id(case: Case, source_id: str) -> str:
   raise LongMemError("selected_occurrence_missing")
 
 
+def _unique(values: tuple[str, ...]) -> tuple[str, ...]:
+  return tuple(dict.fromkeys(values))
+
+
 def _write(path: Path, value: dict[str, Any]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
@@ -777,14 +1150,14 @@ def _digest(value: Any) -> str:
   return hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
 
-def _retriever_identity(retriever: _Retriever) -> dict[str, Any]:
+def _retriever_identity(retriever: _Retriever, *, text: str = "user turns") -> dict[str, Any]:
   if retriever == "lexical":
     return {
       "package": "rank-bm25",
       "version": version("rank-bm25"),
       "numpy": version("numpy"),
       "algorithm": "BM25Okapi",
-      "text": "user turns",
+      "text": text,
       "tie_order": "official descending argsort",
     }
   return {"algorithm": retriever}

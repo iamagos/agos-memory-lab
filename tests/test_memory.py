@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import longmem
 import memory
 from agos_memory.support import source_digest
 
@@ -25,6 +26,7 @@ def test_compile_emits_exact_admission_and_replacement_lineage(tmp_path: Path) -
   receipt_body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
 
   assert report["artifact_id"] == artifact["artifact_id"]
+  assert report["sha256"] == _file_digest(tmp_path / "memory.json")
   assert artifact["artifact_id"] == memory._digest(artifact_body)
   assert receipt["receipt_sha256"] == memory._digest(receipt_body)
   assert artifact["summary"] == {
@@ -75,7 +77,7 @@ def test_identical_inputs_are_byte_identical(tmp_path: Path) -> None:
 
 
 def test_benchmark_labels_do_not_enter_the_memory_artifact(tmp_path: Path) -> None:
-  source_case = memory._sources(memory.longmem._load(FIXTURE))[0]
+  source_case = memory._sources(longmem._load(FIXTURE))[0]
   assert not hasattr(source_case, "question")
   assert not hasattr(source_case, "question_type")
   assert not hasattr(source_case, "answer_session_ids")
