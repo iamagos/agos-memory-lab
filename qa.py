@@ -20,6 +20,7 @@ import longmem
 
 _PROMPT_REVISION = "longmem-direct-v1"
 _JUDGE_REVISION = f"longmem-official-{longmem._BENCHMARK_REVISION}"
+_CHAT_ENVELOPE_TOKENS = 256
 _TASKS = (
   "single-session-user",
   "single-session-assistant",
@@ -676,7 +677,7 @@ def _reader_id(context: Context, config: ChatConfig) -> str:
       "context_sha256": context.context_sha256,
       "question": context.question,
       "question_date": context.question_date,
-      "chat": _config_value(config),
+      "chat": _request_value(config),
     }
   )
 
@@ -691,7 +692,7 @@ def _judge_id(reference: Reference, hypothesis: str, config: ChatConfig) -> str:
       "answer": reference.answer,
       "abstention": reference.abstention,
       "hypothesis_sha256": _text_digest(hypothesis),
-      "chat": _config_value(config),
+      "chat": _request_value(config),
     }
   )
 
@@ -706,10 +707,13 @@ def _run_receipt(
   scores: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   semantic = {
-    "schema": f"agos-memory-lab-{kind}-v1",
+    "schema": f"agos-memory-lab-{kind}-v2",
     "benchmark_revision": longmem._BENCHMARK_REVISION,
     "source": source,
-    "config": _config_value(config),
+    "config": {
+      "request": _request_value(config),
+      "execution": _execution_value(config),
+    },
     "prompt_revision": _PROMPT_REVISION if kind == "read" else _JUDGE_REVISION,
     "cases": [
       {
@@ -792,8 +796,13 @@ def _usage(result: ChatResult) -> dict[str, int | None]:
 def _check_cost(records: Any, *, prompt: str, config: ChatConfig) -> None:
   if config.input_cost == 0 and config.output_cost == 0:
     return
-  reserved = sum(record["cost"]["reserved_usd"] for record in records)
-  if reserved + _reserved_cost(prompt, config=config) > config.max_cost:
+  spent = sum(
+    record["cost"]["estimated_usd"]
+    if record["cost"]["estimated_usd"] is not None
+    else record["cost"]["reserved_usd"]
+    for record in records
+  )
+  if spent + _reserved_cost(prompt, config=config) > config.max_cost:
     raise QAError("chat_cost_cap_reached")
 
 
@@ -820,17 +829,22 @@ def _estimated_cost(result: ChatResult, *, config: ChatConfig) -> float | None:
 
 
 def _reserved_cost(prompt: str, *, config: ChatConfig) -> float:
-  input_tokens = len(prompt.encode()) + 10_000
+  input_tokens = len(prompt.encode()) + _CHAT_ENVELOPE_TOKENS
   value = (input_tokens * config.input_cost + config.max_tokens * config.output_cost) / 1_000_000
   return math.ceil(value * 1_000_000_000_000) / 1_000_000_000_000
 
 
-def _config_value(config: ChatConfig) -> dict[str, Any]:
+def _request_value(config: ChatConfig) -> dict[str, Any]:
   return {
     "base_url": config.base_url,
     "model": config.model,
     "temperature": config.temperature,
     "max_tokens": config.max_tokens,
+  }
+
+
+def _execution_value(config: ChatConfig) -> dict[str, Any]:
+  return {
     "timeout": config.timeout,
     "concurrency": 1,
     "retries": 0,

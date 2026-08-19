@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,23 @@ def test_reader_checkpoints_and_exact_resume_makes_no_second_call(
   assert record["cost"] == {"estimated_usd": 0.0, "reserved_usd": 0.0}
   assert not out.with_suffix(".jsonl.pending.json").exists()
   assert digest == qa._digest(receipt)
+  assert receipt["schema"] == "agos-memory-lab-read-v2"
+  assert receipt["config"] == {
+    "request": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "reader-v1",
+      "temperature": 0.0,
+      "max_tokens": 1_000,
+    },
+    "execution": {
+      "timeout": 120.0,
+      "concurrency": 1,
+      "retries": 0,
+      "input_cost_per_million": 0.0,
+      "output_cost_per_million": 0.0,
+      "max_cost_usd": 0.0,
+    },
+  }
   assert "secret" not in out.read_text()
   assert "secret" not in json.dumps(receipt)
 
@@ -121,6 +139,41 @@ def test_reader_semantic_run_identity_excludes_runtime_measurements(
     run_ids.append(json.loads(out.with_suffix(".jsonl.receipt.json").read_text())["run_id"])
 
   assert run_ids[0] == run_ids[1]
+
+
+def test_request_identity_excludes_execution_policy() -> None:
+  context = qa.Context(RUN_ID, "degree", "What degree?", "2024/01/03", "context", "b" * 64)
+  reference = qa.Reference("degree", "single-session-user", "What degree?", "Business", False)
+  config = _chat_config()
+  execution = replace(
+    config,
+    timeout=30,
+    input_cost=2,
+    output_cost=4,
+    max_cost=20,
+  )
+
+  assert qa._reader_id(context, execution) == qa._reader_id(context, config)
+  assert qa._judge_id(reference, "Business", execution) == qa._judge_id(reference, "Business", config)
+
+
+@pytest.mark.parametrize(
+  "change",
+  [
+    {"base_url": "https://example.com/v1"},
+    {"model": "reader-v2"},
+    {"temperature": 0.5},
+    {"max_tokens": 999},
+  ],
+)
+def test_request_identity_includes_request_semantics(change: dict[str, object]) -> None:
+  context = qa.Context(RUN_ID, "degree", "What degree?", "2024/01/03", "context", "b" * 64)
+  reference = qa.Reference("degree", "single-session-user", "What degree?", "Business", False)
+  config = _chat_config()
+  changed = replace(config, **change)
+
+  assert qa._reader_id(context, changed) != qa._reader_id(context, config)
+  assert qa._judge_id(reference, "Business", changed) != qa._judge_id(reference, "Business", config)
 
 
 def test_unknown_request_outcome_blocks_an_automatic_repeat(
@@ -256,19 +309,27 @@ def test_input_cannot_be_overwritten_by_output(tmp_path: Path) -> None:
 
 
 def test_hard_cost_cap_is_checked_before_a_call() -> None:
-  config = qa.ChatConfig(
-    base_url="https://api.openai.com/v1",
-    model="reader-v1",
-    temperature=0,
-    max_tokens=1_000,
-    timeout=120,
-    input_cost=1,
-    output_cost=1,
-    max_cost=0.001,
-  )
+  config = replace(_chat_config(), input_cost=1, output_cost=1, max_cost=0.001)
 
   with pytest.raises(qa.QAError, match="^chat_cost_cap_reached$"):
     qa._check_cost((), prompt="question", config=config)
+
+
+def test_cost_reservation_is_one_explicit_request_bound() -> None:
+  config = replace(_chat_config(), max_tokens=100, input_cost=2, output_cost=3, max_cost=1)
+
+  assert qa._reserved_cost("é", config=config) == 0.000816
+
+
+def test_completed_actual_cost_releases_unused_reservation() -> None:
+  config = replace(_chat_config(), input_cost=1, output_cost=1, max_cost=0.002)
+  completed = ({"cost": {"estimated_usd": 0.0001, "reserved_usd": 0.9}},)
+
+  qa._check_cost(completed, prompt="question", config=config)
+
+  unknown = ({"cost": {"estimated_usd": None, "reserved_usd": 0.9}},)
+  with pytest.raises(qa.QAError, match="^chat_cost_cap_reached$"):
+    qa._check_cost(unknown, prompt="question", config=config)
 
 
 def test_official_label_is_reported_separately_from_strict_parse() -> None:
@@ -278,6 +339,19 @@ def test_official_label_is_reported_separately_from_strict_parse() -> None:
 
 def _args(*values: str):
   return qa._parser().parse_args(values)
+
+
+def _chat_config() -> qa.ChatConfig:
+  return qa.ChatConfig(
+    base_url="https://api.openai.com/v1",
+    model="reader-v1",
+    temperature=0,
+    max_tokens=1_000,
+    timeout=120,
+    input_cost=0,
+    output_cost=0,
+    max_cost=0,
+  )
 
 
 def _context(question_id: str, question: str, context: str) -> dict[str, str]:
