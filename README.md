@@ -146,10 +146,12 @@ Nonzero prices require a hard cap. Before a request, the runner reserves the
 UTF-8 prompt byte length, a 256-token chat envelope, and the configured output
 limit. Completed provider usage replaces its reservation when deciding whether
 the next request fits. Receipts bind provider, endpoint family, API version,
-model, temperature, and output limit while keeping timeout, prices, cost cap,
-and credentials outside request identity. Both actual and reserved cost remain
-visible. Request identity also records the exact Pydantic AI and OpenAI adapter
-versions.
+model, optional sampling temperature, and output limit while keeping timeout,
+prices, cost cap, and credentials outside request identity. Temperature defaults
+to omitted; `null` in the receipt means no temperature was sent. A temperature
+that a known model profile would discard fails before network I/O. Both actual
+and reserved cost remain visible. Request identity also records the exact
+Pydantic AI and OpenAI adapter versions.
 
 The judge copies the task-specific and abstention behavior from the pinned
 [official evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/evaluate_qa.py),

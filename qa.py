@@ -110,7 +110,7 @@ def _chat_arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> 
   parser.add_argument("--base-url")
   parser.add_argument("--api-version")
   parser.add_argument("--api-key-env")
-  parser.add_argument("--temperature", type=float, default=0.0)
+  parser.add_argument("--temperature", type=float)
   parser.add_argument("--max-tokens", type=int, default=default_tokens)
   parser.add_argument("--timeout", type=float, default=120.0)
   parser.add_argument("--input-cost", type=float, default=0.0, help="USD per million input tokens.")
@@ -636,7 +636,7 @@ def _run_receipt(
   scores: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   semantic = {
-    "schema": f"agos-memory-lab-{kind}-v3",
+    "schema": f"agos-memory-lab-{kind}-v4",
     "benchmark_revision": longmem._BENCHMARK_REVISION,
     "source": source,
     "config": {

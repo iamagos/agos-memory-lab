@@ -26,8 +26,49 @@ def test_openai_completion_uses_one_bounded_chat_request(monkeypatch: pytest.Mon
     "model": "reader-deployment",
     "max_completion_tokens": 20,
     "stream": False,
-    "temperature": 0.0,
   }
+
+
+def test_explicit_supported_temperature_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+  requests: list[httpx.Request] = []
+
+  def respond(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json=_response(), request=request)
+
+  _transport(monkeypatch, respond)
+
+  model.complete("hello", config=_config(temperature=0.0), api_key="secret")
+
+  assert json.loads(requests[0].content)["temperature"] == 0.0
+
+
+@pytest.mark.parametrize(
+  "change",
+  (
+    {},
+    {"provider": "azure", "base_url": "https://resource.openai.azure.com/openai/v1"},
+  ),
+)
+def test_reasoning_model_rejects_temperature_before_request(
+  monkeypatch: pytest.MonkeyPatch, change: dict[str, object]
+) -> None:
+  requests: list[httpx.Request] = []
+
+  def respond(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json=_response(), request=request)
+
+  _transport(monkeypatch, respond)
+
+  with pytest.raises(model.ModelError, match="^chat_temperature_unsupported$"):
+    model.complete(
+      "hello",
+      config=_config(model="gpt-5-mini", temperature=0.0, **change),
+      api_key="secret",
+    )
+
+  assert requests == []
 
 
 @pytest.mark.parametrize(
@@ -174,7 +215,7 @@ def test_endpoint_families_fail_closed(change: dict[str, object], error: str) ->
     "base_url": "https://api.openai.com/v1",
     "api_version": None,
     "model": "reader-deployment",
-    "temperature": 0.0,
+    "temperature": None,
     "max_tokens": 20,
     "timeout": 30.0,
     **change,
@@ -197,7 +238,7 @@ def _config(**change: object) -> model.ModelConfig:
     "base_url": "https://api.openai.com/v1",
     "api_version": None,
     "model": "reader-deployment",
-    "temperature": 0.0,
+    "temperature": None,
     "max_tokens": 20,
     "timeout": 30.0,
     **change,
