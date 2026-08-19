@@ -118,8 +118,12 @@ uv run python qa.py judge \
 
 The default credential is `OPENAI_API_KEY`. A local compatible server can use
 `OPENAI_API_KEY=EMPTY --base-url http://127.0.0.1:8001/v1`. Nonzero prices
-require a hard cap; the runner reserves a deliberately conservative maximum
-before every request and reports both provider usage and reserved cost.
+require a hard cap. Before a request, the runner reserves the UTF-8 prompt byte
+length, a 256-token chat envelope, and the configured output limit. Completed
+provider usage replaces its reservation when deciding whether the next request
+fits. Receipts separate model-request identity from timeout, prices, and the
+cost cap, so changing an execution limit does not invalidate an identical
+checkpoint. Both actual and reserved cost remain visible.
 
 The judge copies the task-specific and abstention behavior from the pinned
 [official evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/evaluate_qa.py),
