@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 import re
 import time
@@ -14,6 +13,8 @@ from typing import Any
 
 import longmem
 import model as chat_model
+import call as bounded
+from call import Config as ChatConfig
 
 
 _PROMPT_REVISION = "longmem-direct-v1"
@@ -46,13 +47,6 @@ class Reference:
   question: str
   answer: str
   abstention: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ChatConfig(chat_model.ModelConfig):
-  input_cost: float
-  output_cost: float
-  max_cost: float
 
 
 ChatResult = chat_model.ModelResult
@@ -105,17 +99,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _chat_arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
-  parser.add_argument("--provider", choices=("openai", "azure"), default="openai")
-  parser.add_argument("--model", required=True)
-  parser.add_argument("--base-url")
-  parser.add_argument("--api-version")
-  parser.add_argument("--api-key-env")
-  parser.add_argument("--temperature", type=float)
-  parser.add_argument("--max-tokens", type=int, default=default_tokens)
-  parser.add_argument("--timeout", type=float, default=120.0)
-  parser.add_argument("--input-cost", type=float, default=0.0, help="USD per million input tokens.")
-  parser.add_argument("--output-cost", type=float, default=0.0, help="USD per million output tokens.")
-  parser.add_argument("--max-cost", type=float, default=0.0, help="Declared maximum estimated USD.")
+  bounded.arguments(parser, default_tokens=default_tokens)
 
 
 def _read(args: argparse.Namespace) -> None:
@@ -141,7 +125,7 @@ def _read(args: argparse.Namespace) -> None:
     prompt = _reader_prompt(context)
     _check_cost(records.values(), prompt=prompt, config=config)
     if key is None:
-      key = _key(_key_env(args, config=config))
+      key = _key(args, config=config)
     _begin_pending(pending_path, question_id=context.question_id, request_id=expected[context.question_id], prompt=prompt)
     started = time.perf_counter()
     result = _chat(prompt, config=config, key=key)
@@ -213,7 +197,7 @@ def _judge(args: argparse.Namespace) -> None:
     prompt = _judge_prompt(reference, hypothesis["hypothesis"])
     _check_cost(records.values(), prompt=prompt, config=config)
     if key is None:
-      key = _key(_key_env(args, config=config))
+      key = _key(args, config=config)
     _begin_pending(pending_path, question_id=question_id, request_id=expected[question_id], prompt=prompt)
     started = time.perf_counter()
     result = _chat(prompt, config=config, key=key)
@@ -255,44 +239,17 @@ def _judge(args: argparse.Namespace) -> None:
 
 
 def _config(args: argparse.Namespace) -> ChatConfig:
-  base_url = args.base_url or ("https://api.openai.com/v1" if args.provider == "openai" else None)
-  if base_url is None:
-    raise QAError("chat_base_url_required")
-  for value in (args.input_cost, args.output_cost, args.max_cost):
-    if not math.isfinite(value) or value < 0:
-      raise QAError("chat_cost_invalid")
-  if (args.input_cost > 0 or args.output_cost > 0) and args.max_cost <= 0:
-    raise QAError("chat_cost_cap_required")
   try:
-    return ChatConfig(
-      provider=args.provider,
-      base_url=base_url,
-      api_version=args.api_version,
-      model=args.model,
-      temperature=args.temperature,
-      max_tokens=args.max_tokens,
-      timeout=args.timeout,
-      input_cost=args.input_cost,
-      output_cost=args.output_cost,
-      max_cost=args.max_cost,
-    )
-  except chat_model.ModelError as exc:
+    return bounded.config(args)
+  except bounded.CallError as exc:
     raise QAError(str(exc)) from exc
 
 
-def _key_env(args: argparse.Namespace, *, config: ChatConfig) -> str:
-  return args.api_key_env or ("AZURE_OPENAI_API_KEY" if config.provider == "azure" else "OPENAI_API_KEY")
-
-
-def _key(name: str) -> str:
-  if not isinstance(name, str) or not name.strip():
-    raise QAError("chat_api_key_env_invalid")
-  key = os.getenv(name)
-  if not key:
-    raise QAError(f"chat_api_key_missing:{name}")
-  if any(ord(character) < 32 or ord(character) == 127 for character in key):
-    raise QAError("chat_api_key_invalid")
-  return key
+def _key(args: argparse.Namespace, *, config: ChatConfig) -> str:
+  try:
+    return bounded.key(args, config=config)
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _chat(prompt: str, *, config: ChatConfig, key: str) -> ChatResult:
@@ -529,45 +486,24 @@ def _resume_actor(value: Any, *, error: str) -> None:
 
 
 def _resume_usage(value: Any, *, error: str) -> None:
-  if not isinstance(value, dict) or set(value) != {"input_tokens", "output_tokens", "total_tokens"}:
-    raise QAError(error)
-  counts = tuple(_resume_count(value[name], error=error) for name in ("input_tokens", "output_tokens", "total_tokens"))
-  if counts[2] is not None and any(count is not None and count > counts[2] for count in counts[:2]):
-    raise QAError(error)
+  try:
+    bounded.validate_usage(value, error=error)
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _resume_cost(value: Any, *, error: str) -> None:
-  if not isinstance(value, dict) or set(value) != {"estimated_usd", "reserved_usd"}:
-    raise QAError(error)
-  estimated = value["estimated_usd"]
-  reserved = value["reserved_usd"]
-  if estimated is not None and (
-    not isinstance(estimated, int | float)
-    or isinstance(estimated, bool)
-    or not math.isfinite(estimated)
-    or estimated < 0
-  ):
-    raise QAError(error)
-  if (
-    not isinstance(reserved, int | float)
-    or isinstance(reserved, bool)
-    or not math.isfinite(reserved)
-    or reserved < 0
-  ):
-    raise QAError(error)
-  if estimated is not None and estimated > reserved:
-    raise QAError(error)
+  try:
+    bounded.validate_cost(value, error=error)
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _resume_duration(value: Any, *, error: str) -> None:
-  if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
-    raise QAError(error)
-
-
-def _resume_count(value: Any, *, error: str) -> int | None:
-  if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
-    raise QAError(error)
-  return value
+  try:
+    bounded.validate_duration(value, error=error)
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _resume_string(value: Any, *, error: str) -> str:
@@ -585,17 +521,16 @@ def _resume_digest(value: Any, *, error: str) -> str:
 def _validate_record_cost(
   record: dict[str, Any], *, prompt: str, config: ChatConfig, error: str
 ) -> None:
-  usage = record["usage"]
-  result = ChatResult(
-    content="validated",
-    model="validated",
-    input_tokens=usage["input_tokens"],
-    output_tokens=usage["output_tokens"],
-    total_tokens=usage["total_tokens"],
-  )
-  expected = _cost(result, prompt=prompt, config=config)
-  if record["cost"] != expected:
-    raise QAError(error)
+  try:
+    bounded.validate(
+      record,
+      prompt=prompt,
+      config=config,
+      overhead=_CHAT_ENVELOPE_TOKENS,
+      error=error,
+    )
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _reader_id(context: Context, config: ChatConfig) -> str:
@@ -715,79 +650,50 @@ def _labels(value: str) -> tuple[bool, bool | None]:
 
 
 def _usage(result: ChatResult) -> dict[str, int | None]:
-  return {
-    "input_tokens": result.input_tokens,
-    "output_tokens": result.output_tokens,
-    "total_tokens": result.total_tokens,
-  }
+  return bounded.usage(result)
 
 
 def _check_cost(records: Any, *, prompt: str, config: ChatConfig) -> None:
-  if config.input_cost == 0 and config.output_cost == 0:
-    return
-  spent = sum(
-    record["cost"]["estimated_usd"]
-    if record["cost"]["estimated_usd"] is not None
-    else record["cost"]["reserved_usd"]
-    for record in records
-  )
-  if spent + _reserved_cost(prompt, config=config) > config.max_cost:
-    raise QAError("chat_cost_cap_reached")
+  try:
+    bounded.check(
+      records,
+      prompt=prompt,
+      config=config,
+      overhead=_CHAT_ENVELOPE_TOKENS,
+    )
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _cost(result: ChatResult, *, prompt: str, config: ChatConfig) -> dict[str, float | None]:
-  estimated = _estimated_cost(result, config=config)
-  reserved = _reserved_cost(prompt, config=config)
-  if estimated is not None and estimated > reserved:
-    raise QAError("chat_cost_bound_exceeded")
-  return {
-    "estimated_usd": round(estimated, 12) if estimated is not None else None,
-    "reserved_usd": reserved,
-  }
+  try:
+    return bounded.cost(
+      result,
+      prompt=prompt,
+      config=config,
+      overhead=_CHAT_ENVELOPE_TOKENS,
+    )
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _estimated_cost(result: ChatResult, *, config: ChatConfig) -> float | None:
-  if (config.input_cost > 0 and result.input_tokens is None) or (
-    config.output_cost > 0 and result.output_tokens is None
-  ):
-    return None
-  return (
-    (result.input_tokens or 0) * config.input_cost
-    + (result.output_tokens or 0) * config.output_cost
-  ) / 1_000_000
+  return bounded.estimate(result, config=config)
 
 
 def _reserved_cost(prompt: str, *, config: ChatConfig) -> float:
-  input_tokens = len(prompt.encode()) + _CHAT_ENVELOPE_TOKENS
-  value = (input_tokens * config.input_cost + config.max_tokens * config.output_cost) / 1_000_000
-  return math.ceil(value * 1_000_000_000_000) / 1_000_000_000_000
+  try:
+    return bounded.reserve(prompt, config=config, overhead=_CHAT_ENVELOPE_TOKENS)
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _request_value(config: ChatConfig) -> dict[str, Any]:
-  return {
-    "adapter": {
-      "api": chat_model.API,
-      "openai": chat_model.OPENAI_VERSION,
-      "pydantic_ai": chat_model.PYDANTIC_AI_VERSION,
-    },
-    "provider": config.provider,
-    "base_url": config.base_url,
-    "api_version": config.api_version,
-    "model": config.model,
-    "temperature": config.temperature,
-    "max_tokens": config.max_tokens,
-  }
+  return bounded.request(config)
 
 
 def _execution_value(config: ChatConfig) -> dict[str, Any]:
-  return {
-    "timeout": config.timeout,
-    "concurrency": 1,
-    "retries": 0,
-    "input_cost_per_million": config.input_cost,
-    "output_cost_per_million": config.output_cost,
-    "max_cost_usd": config.max_cost,
-  }
+  return bounded.execution(config)
 
 
 def _record_result_digest(record: dict[str, Any]) -> str:
@@ -846,14 +752,12 @@ def _distinct_paths(*paths: Path) -> None:
 
 
 def _recover_pending(path: Path, *, records: dict[str, dict[str, Any]]) -> None:
-  if not path.exists():
-    return
   try:
-    value = json.loads(path.read_text())
-  except (OSError, json.JSONDecodeError) as exc:
-    raise QAError("chat_request_outcome_unknown") from exc
-  if not isinstance(value, dict):
-    raise QAError("chat_request_outcome_unknown")
+    value = bounded.pending(path, error="chat_request_outcome_unknown")
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
+  if value is None:
+    return
   question_id = value.get("question_id")
   request_id = value.get("request_id")
   record = records.get(question_id) if isinstance(question_id, str) else None
@@ -874,24 +778,22 @@ def _begin_pending(path: Path, *, question_id: str, request_id: str, prompt: str
     "request_id": request_id,
     "prompt_sha256": _text_digest(prompt),
   }
-  path.parent.mkdir(parents=True, exist_ok=True)
   try:
-    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "w") as target:
-      target.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
-      target.flush()
-      os.fsync(target.fileno())
-  except FileExistsError as exc:
-    raise QAError("chat_request_outcome_unknown") from exc
-  except OSError as exc:
-    raise QAError("chat_pending_write_failed") from exc
+    bounded.begin(
+      path,
+      value,
+      unknown="chat_request_outcome_unknown",
+      failed="chat_pending_write_failed",
+    )
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _clear_pending(path: Path) -> None:
   try:
-    path.unlink()
-  except OSError as exc:
-    raise QAError("chat_pending_clear_failed") from exc
+    bounded.clear(path, error="chat_pending_clear_failed")
+  except bounded.CallError as exc:
+    raise QAError(str(exc)) from exc
 
 
 def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:

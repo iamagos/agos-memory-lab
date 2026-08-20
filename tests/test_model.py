@@ -3,8 +3,15 @@ from collections.abc import Callable
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 import model
+
+
+class Structured(BaseModel):
+  model_config = ConfigDict(extra="forbid")
+
+  memories: list[str]
 
 
 def test_openai_completion_uses_one_bounded_chat_request(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,6 +34,76 @@ def test_openai_completion_uses_one_bounded_chat_request(monkeypatch: pytest.Mon
     "max_completion_tokens": 20,
     "stream": False,
   }
+
+
+def test_structured_completion_uses_one_strict_output_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+  requests: list[httpx.Request] = []
+
+  def respond(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    body = json.loads(request.content)
+    name = body["tools"][0]["function"]["name"]
+    return httpx.Response(
+      200,
+      json={
+        **_response(),
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": None,
+              "tool_calls": [
+                {
+                  "id": "call-1",
+                  "type": "function",
+                  "function": {
+                    "name": name,
+                    "arguments": json.dumps({"memories": ["one"]}),
+                  },
+                }
+              ],
+            },
+            "finish_reason": "tool_calls",
+          }
+        ],
+      },
+      request=request,
+    )
+
+  _transport(monkeypatch, respond)
+  result = model.structure(
+    "hello",
+    output_type=Structured,
+    config=_config(),
+    api_key="secret",
+  )
+
+  assert result == model.ModelResult(Structured(memories=["one"]), "served-model", 13, 2, 15)
+  assert len(requests) == 1
+  body = json.loads(requests[0].content)
+  assert body["tool_choice"] == "required"
+  assert body["tools"] == [
+    {
+      "type": "function",
+      "function": {
+        "name": "final_result",
+        "description": "The final response which ends this conversation",
+        "parameters": {
+          "additionalProperties": False,
+          "properties": {
+            "memories": {
+              "items": {"type": "string"},
+              "type": "array",
+            }
+          },
+          "required": ["memories"],
+          "type": "object",
+        },
+        "strict": True,
+      },
+    }
+  ]
 
 
 def test_explicit_supported_temperature_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:

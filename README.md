@@ -56,6 +56,23 @@ The raw-session path remains the unchanged control. Both paths use the same
 retriever, selection limits, reader, and judge; only the candidate text and its
 source-linked governance differ.
 
+The experiment has one baseline ladder. Each step changes one acquisition or
+retrieval choice while retaining the same reader and judge:
+
+```text
+oracle evidence       debugging ceiling
+full raw history      official no-retrieval control
+raw BM25              primary credential-free control
+raw dense             embedding control
+raw hybrid            lexical + dense control
+extracted memory      treatment under test
+```
+
+Retrieval recall is diagnostic. The end-to-end result is official QA accuracy
+alongside context size, calls, tokens, dollars, latency, omissions, and exact
+source-support failures. A memory lane succeeds only when it improves the whole
+tradeoff against the matching raw lane.
+
 Fetch and verify LongMemEval-S, then run the credential-free BM25 baseline:
 
 ```bash
@@ -185,6 +202,56 @@ or adapter framework until two genuinely different suites prove the same
 abstraction is necessary.
 
 Paid or authenticated runs are always explicit and remain outside CI.
+
+## Live extraction
+
+`extract.py` freezes one additive, source-only extraction pass. Every request
+contains exactly one timestamped source session and never receives the benchmark
+question, answer, answer-session IDs, or abstention label. It checkpoints each
+completed source and blocks an automatic repeat after an unknown outcome.
+
+Plan a window before providing credentials or writing output:
+
+```bash
+uv run python extract.py \
+  --plan \
+  --dataset s \
+  --offset 0 \
+  --limit 1 \
+  --provider azure \
+  --base-url https://RESOURCE.openai.azure.com/openai/v1 \
+  --model gpt-5 \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost HARD_USD_CAP
+```
+
+The plan performs no model calls, reads no API key, and writes no files. It
+reports the exact eligible source count and a conservative ceiling that counts
+each UTF-8 prompt byte as one token and reserves the configured maximum output
+for every source. `--limit` counts benchmark cases, not model calls.
+
+Only after reviewing that plan should the same frozen request be run:
+
+```bash
+uv run python extract.py \
+  --dataset s \
+  --offset 0 \
+  --limit 1 \
+  --out runs/gpt5-extractor.jsonl \
+  --provider azure \
+  --base-url https://RESOURCE.openai.azure.com/openai/v1 \
+  --model gpt-5 \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost HARD_USD_CAP
+```
+
+The resulting JSONL is the frozen input to `memory.py`; its adjacent state and
+receipt files bind every source, request, response model, usage, cost, latency,
+prompt, schema, and output digest. Full-corpus extraction is not a prerequisite
+for development: begin with one complete case, inspect the memories and actual
+usage, then authorize a larger fixed window only if the evidence warrants it.
 
 ## Memory artifact
 
