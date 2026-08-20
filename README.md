@@ -235,12 +235,50 @@ uv run python longmem.py run \
 
 The runner validates the artifact hashes, identities, and active records, then
 binds them to the exact benchmark and dataset. Retrieval sees only active
-admitted memory text. The stateless
-experiment gives `retain()` the source time, optional expiry, and zero prior
+admitted memory text. The stateless experiment gives `retain()` the source
+time, optional expiry, and zero prior
 exposures or attributed uses; it does not claim durable usage history. The
 retriever supplies routes, `select()` owns order and bounds, and every selected
 record must pass `support()` against its exact pinned session before its text is
 rendered. Gold labels enter only the metrics stage.
+
+## Compare
+
+`compare.py` joins already-completed receipts; it never runs retrieval or calls
+a model:
+
+```text
+session retrieval receipt --\
+                           +-> exact contract check -> comparison receipt
+memory retrieval receipt --/              |
+                                          +-- optional reader receipts
+                                          `-- optional judge receipts
+```
+
+```bash
+uv run python compare.py \
+  --sessions runs/session-retrieval.json \
+  --memories runs/memory-retrieval.json \
+  --sessions-read runs/session-hypotheses.jsonl.receipt.json \
+  --memories-read runs/memory-hypotheses.jsonl.receipt.json \
+  --sessions-judge runs/session-evaluation.jsonl.receipt.json \
+  --memories-judge runs/memory-evaluation.jsonl.receipt.json \
+  --out runs/comparison.json
+```
+
+Reader and judge pairs are optional, but never one-sided. The comparator
+requires the same benchmark, dataset window, retriever, candidate and context
+limits, kernel version, reader request, judge request, prices, and execution
+policy. It permits only the intentional retrieval-text difference: raw user
+turns versus admitted memory text. Each reader input hash must also match the
+exact context artifact named by its retrieval receipt.
+
+The receipt reports raw and governed retrieval metrics, context size, every
+retrieval timing, artifact/extractor identity, admission reasons, support
+failures, reader and judge QA, calls, tokens, latency, and dollars. A frozen
+extractor is an exact input, not a model execution receipt; its file hash is
+reported, while live extraction time, tokens, and cost remain owned by the
+future bounded extraction stage.
 
 ## Boundary
 

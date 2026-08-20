@@ -76,6 +76,33 @@ def test_identical_inputs_are_byte_identical(tmp_path: Path) -> None:
   assert (tmp_path / "first.json").read_bytes() == (tmp_path / "second.json").read_bytes()
 
 
+def test_artifact_loader_rejects_a_rewritten_admission_summary(tmp_path: Path) -> None:
+  _, receipt = _run(tmp_path)
+  receipt["artifact"]["summary"]["proposals"] += 1
+  artifact_body = {
+    key: value
+    for key, value in receipt["artifact"].items()
+    if key != "artifact_id"
+  }
+  receipt["artifact"]["artifact_id"] = memory._digest(artifact_body)
+  semantic = {
+    key: value
+    for key, value in receipt.items()
+    if key not in {"run_id", "receipt_sha256"}
+  }
+  receipt["run_id"] = memory._digest(semantic)
+  receipt_body = {
+    key: value
+    for key, value in receipt.items()
+    if key != "receipt_sha256"
+  }
+  receipt["receipt_sha256"] = memory._digest(receipt_body)
+  path = _write_json(tmp_path / "rewritten.json", receipt)
+
+  with pytest.raises(memory.MemoryCompileError, match="^memory_artifact_summary_mismatch$"):
+    memory.load(path, sha256=_file_digest(path))
+
+
 def test_benchmark_labels_do_not_enter_the_memory_artifact(tmp_path: Path) -> None:
   source_case = memory._sources(longmem._load(FIXTURE))[0]
   assert not hasattr(source_case, "question")
