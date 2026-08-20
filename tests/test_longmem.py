@@ -61,6 +61,10 @@ def test_lexical_run_emits_a_verified_governed_receipt(tmp_path: Path) -> None:
   assert receipt["cases"][0]["selected_session_ids"][0] == "answer-1"
   assert context["question_id"] == "degree"
   assert context["run_id"] == receipt["run_id"]
+  assert receipt["contexts"] == {
+    "file": "contexts.jsonl",
+    "sha256": hashlib.sha256(contexts.read_bytes()).hexdigest(),
+  }
   assert "assistant: Congratulations." in context["context"]
   assert "answer" not in context
   assert receipt_hash == hashlib.sha256(
@@ -104,7 +108,20 @@ def test_memory_run_reopens_source_linked_records_before_context(tmp_path: Path)
   update = receipt["cases"][1]
 
   assert receipt["config"]["source"] == "memories"
+  assert receipt["contexts"] == {
+    "file": "memory-contexts.jsonl",
+    "sha256": hashlib.sha256(contexts.read_bytes()).hexdigest(),
+  }
   assert receipt["config"]["artifact"]["sha256"] == artifact_sha256
+  assert receipt["config"]["artifact"]["extractor"]["sha256"] == hashlib.sha256(
+    EXTRACTOR.read_bytes()
+  ).hexdigest()
+  assert receipt["config"]["artifact"]["admission"] == {
+    "cases": 2,
+    "proposals": 5,
+    "outcomes": {"accept": 3, "reject": 1, "replace": 1},
+    "reasons": {"duplicate": 1},
+  }
   assert "selected_occurrence_ids" not in update
   assert update["selected_session_ids"] == ["noise-2", "new-color"]
   assert update["selected_source_occurrence_ids"] == ["2:noise-2", "1:new-color"]
@@ -209,7 +226,7 @@ def test_memory_source_requires_an_exact_matching_artifact(tmp_path: Path) -> No
   assert wrong_revision.stderr.strip() == "memory_artifact_dataset_mismatch"
 
 
-def test_memory_support_rejects_source_drift(tmp_path: Path) -> None:
+def test_memory_support_omits_source_drift_and_records_the_failure(tmp_path: Path) -> None:
   artifact_path, artifact_sha256 = _artifact(tmp_path)
   cases = longmem._load(FIXTURE)
   source = {
@@ -232,24 +249,42 @@ def test_memory_support_rejects_source_drift(tmp_path: Path) -> None:
       for session in cases[1].sessions
     ),
   )
-  with pytest.raises(longmem.LongMemError, match="^memory_artifact_source_digest_mismatch$"):
-    longmem._load_memories(
-      args,
-      source=source,
-      cases=(cases[0], changed, cases[2]),
-    )
+  artifact, grouped = longmem._load_memories(
+    args,
+    source=source,
+    cases=(cases[0], changed, cases[2]),
+  )
+  stale = next(
+    value
+    for value in grouped["update"]
+    if value.session.source_id == "1:new-color"
+  )
 
-  _, grouped = longmem._load_memories(args, source=source, cases=cases)
-  value = grouped["update"][0]
-  stale = replace(value, session=replace(value.session, content="changed"))
+  result = longmem._govern_memory(
+    changed,
+    grouped["update"],
+    (longmem.Hit(stale.record.record_id),),
+    artifact=artifact,
+    source=source,
+    retriever="lexical",
+    top_k=1,
+    chars=100,
+    lexical_weight=0,
+  )
 
-  with pytest.raises(longmem.LongMemError, match="^memory_source_support_stale$"):
-    longmem._reopen(
-      cases[1],
-      (stale.record.record_id,),
-      by_id={stale.record.record_id: stale},
-      source=source,
-    )
+  assert result["selected_memory_ids"] == ()
+  assert result["content"] == ""
+  assert result["receipt"]["support"] == (
+    {
+      "record_id": stale.record.record_id,
+      "source_ref": stale.record.source_ref,
+      "source_occurrence_id": "1:new-color",
+      "source_digest": stale.record.source.digest,
+      "reopened_digest": longmem.source_digest("changed"),
+      "decision": "stale",
+    },
+  )
+  assert result["receipt"]["outcomes"] == ()
 
 
 def test_memory_governance_rejects_a_record_from_another_case(tmp_path: Path) -> None:

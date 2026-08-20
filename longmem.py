@@ -27,7 +27,6 @@ from agos_memory.retain import retain
 from agos_memory.select import select
 from agos_memory.support import source_digest, support
 from agos_memory.types import (
-  Current,
   Omit,
   Omitted,
   ReopenedSource,
@@ -374,6 +373,15 @@ def _run(args: argparse.Namespace) -> None:
     "cases": results,
   }
   run_id = _digest(semantic)
+  context_output = None
+  if args.contexts is not None:
+    context_output = {
+      "file": args.contexts.name,
+      "sha256": _write_jsonl(
+        args.contexts,
+        [{**context, "run_id": run_id} for context in contexts],
+      ),
+    }
   receipt = {
     **semantic,
     "run_id": run_id,
@@ -384,12 +392,11 @@ def _run(args: argparse.Namespace) -> None:
       "kernel_seconds": round(kernel_seconds, 6),
       "total_seconds": round(time.perf_counter() - started, 6),
     },
+    "contexts": context_output,
   }
   receipt = {**receipt, "receipt_sha256": _digest(receipt)}
   out = args.out or Path("runs") / f"{args.retriever}-{run_id[:12]}.json"
   _write(out, receipt)
-  if args.contexts is not None:
-    _write_jsonl(args.contexts, [{**context, "run_id": run_id} for context in contexts])
   print(
     json.dumps(
       {
@@ -478,8 +485,6 @@ def _load_memories(
       raise LongMemError(reason)
     if record.source_date != session.date:
       raise LongMemError("memory_artifact_source_date_mismatch")
-    if record.source.digest != source_digest(session.content):
-      raise LongMemError("memory_artifact_source_digest_mismatch")
     grouped.setdefault(record.case_id, []).append(Memory(record=record, session=session))
   return artifact, {
     case_id: tuple(sorted(values, key=lambda value: value.record.record_id))
@@ -660,6 +665,7 @@ def _govern_memory(
   if any(hit.source_id not in by_id for hit in hits):
     raise LongMemError("retrieval_result_scope_mismatch")
   retained = {}
+  reopened = {}
   items = []
   policy = RetentionPolicy()
   for hit in hits:
@@ -673,6 +679,9 @@ def _govern_memory(
       now=case.asked_at,
     )
     retained[hit.source_id] = decision
+    reopened[hit.source_id] = _reopen(case, value, source=source)
+    if reopened[hit.source_id]["decision"] != "current":
+      continue
     items.append(
       SelectionItem(
         source="memory",
@@ -697,6 +706,7 @@ def _govern_memory(
       signal=retriever,
     )
     for rank, hit in enumerate(hits, start=1)
+    if reopened[hit.source_id]["decision"] == "current"
   )
   selection = select(
     tuple(items),
@@ -722,7 +732,8 @@ def _govern_memory(
     outcome.candidate.source_id
     for outcome in sorted(selection.selected, key=lambda item: item.rank)
   )
-  reopened = _reopen(case, selected, by_id=by_id, source=source)
+  if any(reopened[record_id]["decision"] != "current" for record_id in selected):
+    raise LongMemError("memory_selected_support_invalid")
   return {
     "selected_memory_ids": selected,
     "content": selection.content,
@@ -744,7 +755,7 @@ def _govern_memory(
         }
         for hit in hits
       ),
-      "support": reopened,
+      "support": tuple(reopened[hit.source_id] for hit in hits),
       "outcomes": outcomes,
     },
   }
@@ -752,37 +763,29 @@ def _govern_memory(
 
 def _reopen(
   case: Case,
-  record_ids: tuple[str, ...],
+  value: Memory,
   *,
-  by_id: dict[str, Memory],
   source: dict[str, Any],
-) -> tuple[dict[str, str], ...]:
-  reopened = []
-  for record_id in record_ids:
-    value = by_id.get(record_id)
-    if value is None or value.record.case_id != case.question_id:
-      raise LongMemError("memory_record_reopen_scope_mismatch")
-    current = ReopenedSource(
-      owner=f"{source['repository']}#{case.question_id}",
-      revision=source["revision"],
-      fragment=value.session.source_id,
-      kind="session",
-      digest=source_digest(value.session.content),
-      current_revision=source["revision"],
-    )
-    decision = support(value.record.source, current)
-    if not isinstance(decision, Current):
-      raise LongMemError(f"memory_source_support_{type(decision).__name__.lower()}")
-    reopened.append(
-      {
-        "record_id": record_id,
-        "source_ref": value.record.source_ref,
-        "source_occurrence_id": value.session.source_id,
-        "source_digest": value.record.source.digest,
-        "decision": "current",
-      }
-    )
-  return tuple(reopened)
+) -> dict[str, str]:
+  if value.record.case_id != case.question_id:
+    raise LongMemError("memory_record_reopen_scope_mismatch")
+  current = ReopenedSource(
+    owner=f"{source['repository']}#{case.question_id}",
+    revision=source["revision"],
+    fragment=value.session.source_id,
+    kind="session",
+    digest=source_digest(value.session.content),
+    current_revision=source["revision"],
+  )
+  decision = support(value.record.source, current)
+  return {
+    "record_id": value.record.record_id,
+    "source_ref": value.record.source_ref,
+    "source_occurrence_id": value.session.source_id,
+    "source_digest": value.record.source.digest,
+    "reopened_digest": current.digest,
+    "decision": type(decision).__name__.lower(),
+  }
 
 
 def _outcome(outcome: Selected | Omitted) -> dict[str, Any]:
@@ -1139,11 +1142,13 @@ def _write(path: Path, value: dict[str, Any]) -> None:
   os.replace(partial, path)
 
 
-def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
+def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> str:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text("".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values))
+  encoded = "".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values)
+  partial.write_text(encoded)
   os.replace(partial, path)
+  return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _digest(value: Any) -> str:

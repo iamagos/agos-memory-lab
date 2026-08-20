@@ -108,6 +108,22 @@ class Record:
 
 
 @dataclass(frozen=True, slots=True)
+class Admission:
+  cases: int
+  proposals: int
+  outcomes: tuple[tuple[str, int], ...]
+  reasons: tuple[tuple[str, int], ...]
+
+  def value(self) -> dict[str, Any]:
+    return {
+      "cases": self.cases,
+      "proposals": self.proposals,
+      "outcomes": dict(self.outcomes),
+      "reasons": dict(self.reasons),
+    }
+
+
+@dataclass(frozen=True, slots=True)
 class Artifact:
   artifact_id: str
   run_id: str
@@ -122,6 +138,9 @@ class Artifact:
   extractor_name: str
   extractor_revision: str
   extractor_config_json: str
+  extractor_sha256: str
+  extractor_size: int
+  admission: Admission
   records: tuple[Record, ...]
 
   @property
@@ -135,7 +154,10 @@ class Artifact:
         "name": self.extractor_name,
         "revision": self.extractor_revision,
         "config": json.loads(self.extractor_config_json),
+        "sha256": self.extractor_sha256,
+        "size": self.extractor_size,
       },
+      "admission": self.admission.value(),
     }
 
 
@@ -297,7 +319,7 @@ def _artifact(receipt: dict[str, Any], *, sha256: str) -> Artifact:
   if dataset_input["repository"] != repository or dataset_input["revision"] != revision:
     raise MemoryCompileError("memory_artifact_dataset_mismatch")
   extractor = _extractor_identity(artifact["extractor"])
-  records = _records(
+  records, admission = _records(
     artifact["cases"],
     extractor=extractor,
     dataset_repository=repository,
@@ -308,7 +330,13 @@ def _artifact(receipt: dict[str, Any], *, sha256: str) -> Artifact:
     keys={"cases", "proposals", "outcomes", "active_records"},
     error="memory_artifact_summary_invalid",
   )
-  if _count(summary["active_records"], error="memory_artifact_summary_invalid") != len(records):
+  expected_summary = {
+    "cases": admission.cases,
+    "proposals": admission.proposals,
+    "outcomes": dict(admission.outcomes),
+    "active_records": len(records),
+  }
+  if summary != expected_summary:
     raise MemoryCompileError("memory_artifact_summary_mismatch")
   return Artifact(
     artifact_id=artifact_id,
@@ -324,6 +352,9 @@ def _artifact(receipt: dict[str, Any], *, sha256: str) -> Artifact:
     extractor_name=extractor["name"],
     extractor_revision=extractor["revision"],
     extractor_config_json=_canonical(extractor["config"]).decode(),
+    extractor_sha256=extractor_input["sha256"],
+    extractor_size=extractor_input["size"],
+    admission=admission,
     records=records,
   )
 
@@ -348,12 +379,15 @@ def _records(
   extractor: dict[str, Any],
   dataset_repository: str,
   dataset_revision: str,
-) -> tuple[Record, ...]:
+) -> tuple[tuple[Record, ...], Admission]:
   if not isinstance(values, list):
     raise MemoryCompileError("memory_artifact_cases_invalid")
   case_ids: list[str] = []
   records: list[Record] = []
   seen: set[str] = set()
+  outcomes = {"accept": 0, "reject": 0, "replace": 0}
+  reasons: dict[str, int] = {}
+  proposals = 0
   for value in values:
     case = _object(
       value,
@@ -371,8 +405,14 @@ def _records(
     for decision in decisions:
       if not isinstance(decision, dict) or decision.get("outcome") not in {"accept", "replace", "reject"}:
         raise MemoryCompileError("memory_artifact_decision_invalid")
+      outcome = decision["outcome"]
+      outcomes[outcome] += 1
+      proposals += 1
+      if outcome == "reject":
+        reason = _text(decision.get("reason"), error="memory_artifact_decision_invalid")
+        reasons[reason] = reasons.get(reason, 0) + 1
       record_id = decision.get("record_id")
-      if decision["outcome"] != "reject":
+      if outcome != "reject":
         record_id = _text(record_id, error="memory_artifact_record_identity_invalid")
         if record_id in accepted:
           raise MemoryCompileError("memory_artifact_record_identity_duplicated")
@@ -398,7 +438,12 @@ def _records(
       )
   if case_ids != sorted(set(case_ids)):
     raise MemoryCompileError("memory_artifact_case_identity_invalid")
-  return tuple(records)
+  return tuple(records), Admission(
+    cases=len(case_ids),
+    proposals=proposals,
+    outcomes=tuple(outcomes.items()),
+    reasons=tuple(sorted(reasons.items())),
+  )
 
 
 def _record(
@@ -1000,12 +1045,6 @@ def _object(value: Any, *, keys: set[str], error: str) -> dict[str, Any]:
 
 def _size(value: Any, *, error: str) -> int:
   if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-    raise MemoryCompileError(error)
-  return value
-
-
-def _count(value: Any, *, error: str) -> int:
-  if not isinstance(value, int) or isinstance(value, bool) or value < 0:
     raise MemoryCompileError(error)
   return value
 
