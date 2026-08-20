@@ -61,11 +61,13 @@ def test_reader_checkpoints_and_exact_resume_makes_no_second_call(
         "pydantic_ai": "2.21.0",
       },
       "provider": "openai",
+      "provider_id": "openai",
       "base_url": "https://api.openai.com/v1",
       "api_version": None,
       "model": "reader-v1",
       "temperature": None,
       "max_tokens": 1_000,
+      "max_tokens_field": "max_completion_tokens",
     },
     "execution": {
       "timeout": 120.0,
@@ -170,12 +172,15 @@ def test_request_identity_excludes_execution_policy() -> None:
     {"base_url": "https://example.com/v1"},
     {
       "provider": "azure",
+      "provider_id": "azure-openai",
       "base_url": "https://resource.openai.azure.com/openai/v1",
     },
+    {"provider_id": "deepseek"},
     {"model": "reader-v2"},
     {"temperature": 0.5},
     {"reasoning_effort": "minimal"},
     {"max_tokens": 999},
+    {"max_tokens_field": "max_tokens"},
   ],
 )
 def test_request_identity_includes_request_semantics(change: dict[str, object]) -> None:
@@ -192,12 +197,14 @@ def test_request_identity_includes_azure_api_version() -> None:
   context = qa.Context(RUN_ID, "degree", "What degree?", "2024/01/03", "context", "b" * 64)
   config = qa.ChatConfig(
     provider="azure",
+    provider_id="azure-openai",
     base_url="https://resource.openai.azure.com",
     api_version="2025-04-01-preview",
     model="reader-v1",
     temperature=None,
     reasoning_effort=None,
     max_tokens=1_000,
+    max_tokens_field="max_completion_tokens",
     timeout=120,
     input_cost=0,
     output_cost=0,
@@ -374,12 +381,14 @@ def _args(*values: str):
 def _chat_config() -> qa.ChatConfig:
   return qa.ChatConfig(
     provider="openai",
+    provider_id="openai",
     base_url="https://api.openai.com/v1",
     api_version=None,
     model="reader-v1",
     temperature=None,
     reasoning_effort=None,
     max_tokens=1_000,
+    max_tokens_field="max_completion_tokens",
     timeout=120,
     input_cost=0,
     output_cost=0,

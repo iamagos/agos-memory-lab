@@ -121,6 +121,7 @@ def _parser() -> argparse.ArgumentParser:
   parser.add_argument("--sha256", help="Required SHA-256 for --file.")
   parser.add_argument("--revision", help="Required immutable identity for --file.")
   parser.add_argument("--data", type=Path, default=Path("data"))
+  parser.add_argument("--manifest", type=Path, help="Frozen case manifest applied before offset and limit.")
   parser.add_argument("--offset", type=int, default=0, help="First case to extract.")
   parser.add_argument("--limit", type=int, default=0, help="Case count; zero means all remaining cases.")
   parser.add_argument(
@@ -199,6 +200,7 @@ def _plan(args: argparse.Namespace) -> dict[str, Any]:
       "file": source["path"].name,
       "sha256": source["sha256"],
     },
+    **({"selection": source["selection"]} if "selection" in source else {}),
     "window": {
       "offset": args.offset,
       "cases": len(cases),
@@ -226,7 +228,10 @@ def _inputs(
   config = _config(args)
   source = longmem._source(args)
   longmem._verify_file(source["path"], sha256=source["sha256"], size=source["size"])
-  cases = _window(memory._sources(longmem._load(source["path"])), offset=args.offset, limit=args.limit)
+  selected, selection = longmem._select_cases(longmem._load(source["path"]), args=args, source=source)
+  if selection is not None:
+    source = {**source, "selection": selection}
+  cases = memory._sources(selected)
   return config, source, cases, _jobs(
     cases,
     source=source,
@@ -484,6 +489,7 @@ def _receipt(
       "sha256": source["sha256"],
       "size": source["size"],
     },
+    **({"selection": source["selection"]} if "selection" in source else {}),
     "window": {
       "offset": offset,
       "cases": [case.case_id for case in cases],
@@ -605,7 +611,7 @@ def _jsonl(path: Path, *, error: str) -> list[Any]:
     raise ExtractError(error)
   values = []
   try:
-    with path.open() as source:
+    with path.open(encoding="utf-8") as source:
       for line in source:
         if line.strip():
           values.append(json.loads(line, parse_constant=_invalid_constant))
@@ -619,8 +625,8 @@ def _jsonl(path: Path, *, error: str) -> list[Any]:
 def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text(
-    "".join(f"{json.dumps(value, separators=(',', ':'), sort_keys=True)}\n" for value in values)
+  partial.write_bytes(
+    "".join(f"{json.dumps(value, separators=(',', ':'), sort_keys=True)}\n" for value in values).encode("utf-8")
   )
   os.replace(partial, path)
 
@@ -628,7 +634,7 @@ def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
 def _write(path: Path, value: dict[str, Any]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+  partial.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
   os.replace(partial, path)
 
 
