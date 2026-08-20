@@ -209,6 +209,9 @@ Paid or authenticated runs are always explicit and remain outside CI.
 contains exactly one timestamped source session and never receives the benchmark
 question, answer, answer-session IDs, or abstention label. It checkpoints each
 completed source and blocks an automatic repeat after an unknown outcome.
+The model returns only bounded memory text. The host deterministically emits
+`kind=fact` and `confidence=1.0`, so this treatment does not rank on
+model-invented categories or uncalibrated confidence scores.
 
 Plan a window before providing credentials or writing output:
 
