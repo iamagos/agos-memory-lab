@@ -107,7 +107,7 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
   session_report = _report(sessions, read=session_read, judge=session_judge)
   memory_report = _report(memories, read=memory_read, judge=memory_judge)
   semantic = {
-    "schema": "agos-memory-lab-comparison-v1",
+    "schema": "agos-memory-lab-comparison-v2",
     "contract": contract,
     "sessions": session_report,
     "memories": memory_report,
@@ -277,9 +277,17 @@ def _retrieval_contract(value: Any, *, source: str) -> dict[str, Any]:
 
 
 def _qa_contract(value: dict[str, Any]) -> dict[str, Any]:
+  config = value["config"]
   return {
     "benchmark_revision": value["benchmark_revision"],
-    "config": value["config"],
+    "config": {
+      "request": config["request"],
+      "execution": {
+        key: item
+        for key, item in config["execution"].items()
+        if key != "max_cost_usd"
+      },
+    },
     "prompt_revision": value["prompt_revision"],
   }
 

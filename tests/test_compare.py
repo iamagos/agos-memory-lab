@@ -24,6 +24,7 @@ def test_comparison_reports_exact_retrieval_and_memory_artifact_evidence(tmp_pat
   receipt = compare._compare(args)
   compare._write(args.out, receipt)
 
+  assert receipt["schema"] == "agos-memory-lab-comparison-v2"
   assert receipt["contract"]["cases"] == ["degree", "update", "missing_abs"]
   assert receipt["contract"]["reader"] is None
   assert receipt["contract"]["judge"] is None
@@ -131,6 +132,53 @@ def test_comparison_rejects_different_reader_requests(tmp_path: Path) -> None:
     accuracy=0.5,
     model="different-model",
   )
+
+  with pytest.raises(compare.CompareError, match="^comparison_reader_contract_mismatch$"):
+    compare._compare(
+      _args(
+        sessions,
+        memories,
+        out=tmp_path / "no.json",
+        session_read=session_read,
+        memory_read=memory_read,
+      )
+    )
+
+
+def test_comparison_allows_different_completed_run_cost_caps(tmp_path: Path) -> None:
+  sessions, memories = _runs(tmp_path)
+  session_read, session_judge = _qa_pair(tmp_path, "sessions", sessions, accuracy=0.5)
+  memory_read, memory_judge = _qa_pair(tmp_path, "memories", memories, accuracy=0.75)
+  for path in (memory_read, memory_judge):
+    value = json.loads(path.read_text())
+    value["config"]["execution"]["max_cost_usd"] = 0.25
+    _resign(value)
+    _write(path, value)
+
+  receipt = compare._compare(
+    _args(
+      sessions,
+      memories,
+      out=tmp_path / "comparison.json",
+      session_read=session_read,
+      memory_read=memory_read,
+      session_judge=session_judge,
+      memory_judge=memory_judge,
+    )
+  )
+
+  assert "max_cost_usd" not in receipt["contract"]["reader"]["config"]["execution"]
+  assert "max_cost_usd" not in receipt["contract"]["judge"]["config"]["execution"]
+
+
+def test_comparison_rejects_different_reader_prices(tmp_path: Path) -> None:
+  sessions, memories = _runs(tmp_path)
+  session_read, _ = _qa_pair(tmp_path, "sessions", sessions, accuracy=0.5)
+  memory_read, _ = _qa_pair(tmp_path, "memories", memories, accuracy=0.5)
+  value = json.loads(memory_read.read_text())
+  value["config"]["execution"]["input_cost_per_million"] = 2.0
+  _resign(value)
+  _write(memory_read, value)
 
   with pytest.raises(compare.CompareError, match="^comparison_reader_contract_mismatch$"):
     compare._compare(
