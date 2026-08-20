@@ -28,6 +28,7 @@ import longmem
 
 _SCHEMA = "agos-memory-lab-memory-v1"
 _EXTRACTOR_SCHEMA = "agos-memory-lab-extractor-v1"
+_AVAILABILITY = frozenset(("released", "causal"))
 _KINDS = frozenset(("event", "fact", "preference"))
 _RULES = AdmissionRules(
   partition_rules=(
@@ -140,6 +141,7 @@ class Artifact:
   extractor_config_json: str
   extractor_sha256: str
   extractor_size: int
+  availability: str
   admission: Admission
   records: tuple[Record, ...]
 
@@ -354,6 +356,7 @@ def _artifact(receipt: dict[str, Any], *, sha256: str) -> Artifact:
     extractor_config_json=_canonical(extractor["config"]).decode(),
     extractor_sha256=extractor_input["sha256"],
     extractor_size=extractor_input["size"],
+    availability=_availability(extractor["config"]),
     admission=admission,
     records=records,
   )
@@ -623,6 +626,7 @@ def _compile(
   benchmark_revision: str,
   extractor: Extractor,
 ) -> dict[str, Any]:
+  availability = _availability(extractor.config)
   by_case = {case.case_id: case for case in cases}
   sessions_by_case = {
     case_id: {session.source_id: session for session in case.sessions}
@@ -631,7 +635,12 @@ def _compile(
   rows_by_case: dict[str, list[ExtractorRow]] = {}
   for row in extractor.rows:
     rows_by_case.setdefault(row.case_id, []).append(row)
-  _validate_rows(extractor.rows, by_case=by_case, sessions_by_case=sessions_by_case)
+  _validate_rows(
+    extractor.rows,
+    by_case=by_case,
+    sessions_by_case=sessions_by_case,
+    availability=availability,
+  )
   aliases = _aliases(extractor.rows)
   extractor_identity = extractor.identity
   compiled = []
@@ -740,6 +749,7 @@ def _validate_rows(
   *,
   by_case: dict[str, SourceCase],
   sessions_by_case: dict[str, dict[str, Source]],
+  availability: str,
 ) -> None:
   if not rows:
     raise MemoryCompileError("extractor_proposals_empty")
@@ -763,7 +773,7 @@ def _validate_rows(
       raise MemoryCompileError("extractor_source_date_mismatch")
     if row.source_digest != source_digest(session.content):
       raise MemoryCompileError("extractor_source_digest_mismatch")
-    if session.at > case.cutoff:
+    if availability == "causal" and session.at > case.cutoff:
       raise MemoryCompileError("extractor_source_future")
 
     proposal_key = (row.case_id, row.proposal_id)
@@ -961,6 +971,13 @@ def _header(value: Any) -> dict[str, Any]:
     raise MemoryCompileError("extractor_config_invalid")
   _canonical(value["config"])
   return {"name": name, "revision": revision, "config": value["config"]}
+
+
+def _availability(config: dict[str, Any]) -> str:
+  value = config.get("availability", "causal")
+  if value not in _AVAILABILITY:
+    raise MemoryCompileError("extractor_availability_invalid")
+  return value
 
 
 def _row(value: Any) -> ExtractorRow:

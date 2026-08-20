@@ -54,9 +54,11 @@ pinned sessions -----------------------------> raw retrieval
 ```
 
 The raw-session path remains the unchanged control. A memory run may add a
-tightly bounded raw-session candidate plane with `--episodes 1`. It admits only
-sessions at or before the question cutoff, records later sessions as exact
-omissions, and composes both planes through one kernel selection budget. The
+tightly bounded raw-session candidate plane with `--episodes 1`. Official
+LongMemEval runs use the complete released haystack for both planes. A stricter
+`--availability causal` extraction excludes sessions after the question cutoff,
+records them as exact omissions, and applies the same policy to episodic
+candidates. Both modes compose through one kernel selection budget. The episode
 default is zero, so the memory-only treatment remains unchanged.
 
 The experiment has one baseline ladder. Each step changes one acquisition or
@@ -131,11 +133,13 @@ that candidate. Component ranks are attribution evidence, not confidence or
 truth.
 
 LongMemEval contains duplicate session IDs and a few timestamps later than the
-question time. The raw control treats inclusion in the released haystack as
-corpus availability. The episodic memory plane instead enforces the question
-cutoff. Both use a unique occurrence ID internally and retain the official
-session ID for metrics. The optional contexts file contains the question and
-exact bounded selection text, including explicit truncation, but no gold answer.
+question time. The default `released` availability treats inclusion in the
+released haystack as corpus availability, matching the official benchmark.
+`causal` is a separately named Agos diagnostic and must not be reported as an
+official LongMemEval score. Both use a unique occurrence ID internally and
+retain the official session ID for metrics. The optional contexts file contains
+the question and exact bounded selection text, including explicit truncation,
+but no gold answer.
 
 `qa.py` owns the experiment, while `model.py` makes one pinned Pydantic AI Chat
 Completions request. It checkpoints after each response and resumes only when

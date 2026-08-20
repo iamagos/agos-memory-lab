@@ -40,6 +40,7 @@ Session date: {date}
 """
 _PROMPT_SHA256 = hashlib.sha256(_PROMPT_TEMPLATE.encode()).hexdigest()
 _ENVELOPE_BYTES = 256
+_AVAILABILITY = ("released", "causal")
 
 
 class Batch(BaseModel):
@@ -122,6 +123,12 @@ def _parser() -> argparse.ArgumentParser:
   parser.add_argument("--data", type=Path, default=Path("data"))
   parser.add_argument("--offset", type=int, default=0, help="First case to extract.")
   parser.add_argument("--limit", type=int, default=0, help="Case count; zero means all remaining cases.")
+  parser.add_argument(
+    "--availability",
+    choices=_AVAILABILITY,
+    default="released",
+    help="Released uses the complete benchmark haystack; causal enforces the question timestamp.",
+  )
   parser.add_argument("--plan", action="store_true", help="Print the bounded call plan without credentials or writes.")
   parser.add_argument("--out", type=Path, help="Frozen extractor JSONL; required unless --plan.")
   parser.add_argument("--state", type=Path, help="Durable per-source checkpoint JSONL.")
@@ -160,7 +167,7 @@ def _extract(args: argparse.Namespace) -> dict[str, Any]:
     _clear(pending_path)
 
   ordered = [records[job.key] for job in jobs]
-  extractor = _artifact(ordered, config=config)
+  extractor = _artifact(ordered, config=config, availability=args.availability)
   _write_jsonl(args.out, extractor)
   receipt = _receipt(
     source=source,
@@ -169,6 +176,7 @@ def _extract(args: argparse.Namespace) -> dict[str, Any]:
     jobs=jobs,
     records=ordered,
     config=config,
+    availability=args.availability,
     state=state_path,
     out=args.out,
   )
@@ -195,7 +203,8 @@ def _plan(args: argparse.Namespace) -> dict[str, Any]:
       "offset": args.offset,
       "cases": len(cases),
       "sources": len(jobs),
-      "future_sources_omitted": _future(cases),
+      "availability": args.availability,
+      "future_sources_omitted": _future_omitted(cases, availability=args.availability),
     },
     "config": {
       "request": bounded.request(config),
@@ -218,7 +227,12 @@ def _inputs(
   source = longmem._source(args)
   longmem._verify_file(source["path"], sha256=source["sha256"], size=source["size"])
   cases = _window(memory._sources(longmem._load(source["path"])), offset=args.offset, limit=args.limit)
-  return config, source, cases, _jobs(cases, source=source, config=config)
+  return config, source, cases, _jobs(
+    cases,
+    source=source,
+    config=config,
+    availability=args.availability,
+  )
 
 
 def _config(args: argparse.Namespace) -> bounded.Config:
@@ -244,11 +258,14 @@ def _jobs(
   *,
   source: dict[str, Any],
   config: bounded.Config,
+  availability: str = "released",
 ) -> tuple[Job, ...]:
+  if availability not in _AVAILABILITY:
+    raise ExtractError("extraction_availability_invalid")
   jobs = []
   for case in cases:
     for session in case.sessions:
-      if session.at > case.cutoff:
+      if availability == "causal" and session.at > case.cutoff:
         continue
       prompt = _prompt(session)
       digest = memory.source_digest(session.content)
@@ -388,7 +405,12 @@ def _resume(
   return value
 
 
-def _artifact(records: list[dict[str, Any]], *, config: bounded.Config) -> list[dict[str, Any]]:
+def _artifact(
+  records: list[dict[str, Any]],
+  *,
+  config: bounded.Config,
+  availability: str,
+) -> list[dict[str, Any]]:
   header = {
     "type": "extractor",
     "schema": "agos-memory-lab-extractor-v1",
@@ -396,6 +418,7 @@ def _artifact(records: list[dict[str, Any]], *, config: bounded.Config) -> list[
     "revision": _PROMPT_REVISION,
     "config": {
       "mode": "live-additive",
+      "availability": availability,
       "prompt_sha256": _PROMPT_SHA256,
       "output_schema_sha256": _output_schema_sha256(),
       "request": bounded.request(config),
@@ -439,6 +462,7 @@ def _receipt(
   jobs: tuple[Job, ...],
   records: list[dict[str, Any]],
   config: bounded.Config,
+  availability: str,
   state: Path,
   out: Path,
 ) -> dict[str, Any]:
@@ -464,7 +488,8 @@ def _receipt(
       "offset": offset,
       "cases": [case.case_id for case in cases],
       "sources": len(jobs),
-      "future_sources_omitted": _future(cases),
+      "availability": availability,
+      "future_sources_omitted": _future_omitted(cases, availability=availability),
       "source_sha256": _digest([job.identity for job in jobs]),
     },
     "config": {
@@ -507,7 +532,13 @@ def _overhead() -> int:
   return len(schema.encode()) + _ENVELOPE_BYTES
 
 
-def _future(cases: tuple[memory.SourceCase, ...]) -> int:
+def _future_omitted(
+  cases: tuple[memory.SourceCase, ...],
+  *,
+  availability: str,
+) -> int:
+  if availability == "released":
+    return 0
   return sum(
     session.at > case.cutoff
     for case in cases

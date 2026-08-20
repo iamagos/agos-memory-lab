@@ -229,7 +229,13 @@ def _run(args: argparse.Namespace) -> None:
     for case in cases
   }
   episode_entries_by_case = (
-    {case.question_id: _episode_entries(case) for case in cases}
+    {
+      case.question_id: _episode_entries(
+        case,
+        availability=artifact.availability if artifact is not None else "released",
+      )
+      for case in cases
+    }
     if args.episodes
     else {}
   )
@@ -404,7 +410,7 @@ def _run(args: argparse.Namespace) -> None:
                 "reason": "after_cutoff",
               }
               for session in case.sessions
-              if session.at > case.asked_at
+              if artifact.availability == "causal" and session.at > case.asked_at
             ),
           }
           context_ids = {
@@ -606,8 +612,17 @@ def _session_entries(case: Case) -> tuple[Entry, ...]:
   )
 
 
-def _episode_entries(case: Case) -> tuple[Entry, ...]:
-  return tuple(entry for entry in _session_entries(case) if entry.at <= case.asked_at)
+def _episode_entries(case: Case, *, availability: str) -> tuple[Entry, ...]:
+  available = _available_sessions(case, availability=availability)
+  return tuple(
+    Entry(
+      source_id=session.source_id,
+      benchmark_id=session.benchmark_id,
+      text=session.text,
+      at=session.at,
+    )
+    for session in available
+  )
 
 
 def _memory_entries(values: tuple[Memory, ...]) -> tuple[Entry, ...]:
@@ -797,11 +812,10 @@ def _govern_memory(
   by_id = {value.record.record_id: value for value in values}
   if any(hit.source_id not in by_id for hit in hits):
     raise LongMemError("retrieval_result_scope_mismatch")
-  sessions = {
-    session.source_id: session
-    for session in case.sessions
-    if session.at <= case.asked_at
-  }
+  available = _available_sessions(case, availability=artifact.availability)
+  sessions = {session.source_id: session for session in available}
+  now = max((session.at for session in available), default=case.asked_at)
+  now = max(now, case.asked_at)
   if any(hit.source_id not in sessions for hit in episode_hits):
     raise LongMemError("episode_retrieval_result_scope_mismatch")
   retained = {}
@@ -816,7 +830,7 @@ def _govern_memory(
         expires_at=value.record.expires_at,
       ),
       policy=policy,
-      now=case.asked_at,
+      now=now,
     )
     retained[hit.source_id] = decision
     reopened[hit.source_id] = _reopen(case, value, source=source)
@@ -880,7 +894,7 @@ def _govern_memory(
       lexical_weight=lexical_weight,
       route_rank_ceiling=100,
     ),
-    now=case.asked_at,
+    now=now,
     include_paths=True,
   )
   outcomes = tuple(_outcome(outcome, exact=mixed) for outcome in selection.outcomes)
@@ -922,6 +936,14 @@ def _govern_memory(
       "outcomes": outcomes,
     },
   }
+
+
+def _available_sessions(case: Case, *, availability: str) -> tuple[Session, ...]:
+  if availability == "released":
+    return case.sessions
+  if availability == "causal":
+    return tuple(session for session in case.sessions if session.at <= case.asked_at)
+  raise LongMemError("memory_availability_invalid")
 
 
 def _reopen(
