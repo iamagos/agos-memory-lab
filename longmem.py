@@ -35,6 +35,7 @@ from agos_memory.types import (
   Selected,
   SelectionItem,
   SelectionLimits,
+  SelectionPath,
   SelectionPolicy,
   SelectionPriority,
   SelectionRoute,
@@ -90,6 +91,13 @@ class Case:
 @dataclass(frozen=True, slots=True)
 class Hit:
   source_id: str
+  paths: tuple[SelectionPath, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Ranking:
+  lane: str
+  hits: tuple[Hit, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -653,22 +661,31 @@ def _retrieve_episodes(
   return _retrieve_entries(case, entries, retriever=retriever, limit=limit)
 
 
-def _rrf(case: Case, *rankings: tuple[Hit, ...], limit: int) -> tuple[Hit, ...]:
+def _rrf(case: Case, *rankings: Ranking, limit: int) -> tuple[Hit, ...]:
   return _rrf_entries(_session_entries(case), *rankings, limit=limit)
 
 
 def _rrf_entries(
   entries: tuple[Entry, ...],
-  *rankings: tuple[Hit, ...],
+  *rankings: Ranking,
   limit: int,
 ) -> tuple[Hit, ...]:
   scores: dict[str, float] = {}
+  paths: dict[str, list[SelectionPath]] = {}
   for ranking in rankings:
-    for rank, hit in enumerate(ranking, start=1):
+    identities = tuple(hit.source_id for hit in ranking.hits)
+    if len(identities) != len(set(identities)):
+      raise LongMemError("rrf_ranking_identity_duplicated")
+    for rank, hit in enumerate(ranking.hits, start=1):
       scores[hit.source_id] = scores.get(hit.source_id, 0.0) + 1 / (60 + rank)
+      paths.setdefault(hit.source_id, []).append(
+        SelectionPath(lane=ranking.lane, rank=rank, signal="retrieved")
+      )
   order = {entry.source_id: index for index, entry in enumerate(entries)}
+  if not set(scores) <= set(order):
+    raise LongMemError("rrf_result_scope_mismatch")
   source_ids = sorted(scores, key=lambda source_id: (-scores[source_id], order[source_id]))
-  return tuple(Hit(source_id) for source_id in source_ids[:limit])
+  return tuple(Hit(source_id, tuple(paths[source_id])) for source_id in source_ids[:limit])
 
 
 def _govern(
@@ -683,7 +700,7 @@ def _govern(
   by_id = {session.source_id: session for session in case.sessions}
   if any(hit.source_id not in by_id for hit in hits):
     raise LongMemError("retrieval_result_scope_mismatch")
-  items = tuple(_session_item(by_id[hit.source_id]) for hit in hits)
+  items = tuple(_session_item(by_id[hit.source_id], paths=hit.paths) for hit in hits)
   routes = tuple(
     SelectionRoute(
       source="session",
@@ -729,7 +746,11 @@ def _govern(
   }
 
 
-def _session_item(session: Session) -> SelectionItem:
+def _session_item(
+  session: Session,
+  *,
+  paths: tuple[SelectionPath, ...] = (),
+) -> SelectionItem:
   return SelectionItem(
     source="session",
     source_id=session.source_id,
@@ -744,6 +765,7 @@ def _session_item(session: Session) -> SelectionItem:
     updated_at=session.at,
     revision=session.date,
     source_digest=source_digest(session.content),
+    paths=paths,
   )
 
 
@@ -803,10 +825,11 @@ def _govern_memory(
         revision=artifact.artifact_id,
         source_digest=value.record.source.digest,
         omission="retention" if isinstance(decision, Omit) else None,
+        paths=hit.paths,
       )
     )
   items.extend(
-    _session_item(sessions[hit.source_id])
+    _session_item(sessions[hit.source_id], paths=hit.paths)
     for hit in episode_hits
   )
   routes = tuple(
@@ -1121,7 +1144,12 @@ class _Qdrant:
     if not self._hybrid:
       return hits
     lexical = _retrieve_entries(case, entries, retriever="lexical", limit=limit)
-    return _rrf_entries(entries, hits, lexical, limit=limit)
+    return _rrf_entries(
+      entries,
+      Ranking("qdrant-dense", hits),
+      Ranking("lexical", lexical),
+      limit=limit,
+    )
 
   def close(self) -> None:
     self._client.close()
