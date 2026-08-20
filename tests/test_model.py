@@ -120,6 +120,44 @@ def test_explicit_supported_temperature_is_sent(monkeypatch: pytest.MonkeyPatch)
   assert json.loads(requests[0].content)["temperature"] == 0.0
 
 
+def test_explicit_reasoning_effort_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+  requests: list[httpx.Request] = []
+
+  def respond(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json=_response(), request=request)
+
+  _transport(monkeypatch, respond)
+
+  model.complete("hello", config=_config(reasoning_effort="minimal"), api_key="secret")
+
+  assert json.loads(requests[0].content)["reasoning_effort"] == "minimal"
+
+
+@pytest.mark.parametrize(
+  "message,error",
+  (
+    ("Model token limit (1000) exceeded before any response was generated.", "chat_output_limit_exceeded"),
+    ("Exceeded maximum output retries (0)", "chat_output_invalid"),
+    ("Invalid response from OpenAI chat completions endpoint", "chat_response_invalid"),
+  ),
+)
+def test_unexpected_model_failures_have_safe_stable_codes(
+  monkeypatch: pytest.MonkeyPatch,
+  message: str,
+  error: str,
+) -> None:
+  async def fail(*_: object, **__: object) -> None:
+    raise model.UnexpectedModelBehavior(message, body='{"private":"content"}')
+
+  monkeypatch.setattr(model, "_run", fail)
+
+  with pytest.raises(model.ModelError, match=f"^{error}$") as raised:
+    model.complete("hello", config=_config(), api_key="secret")
+
+  assert "private" not in str(raised.value)
+
+
 @pytest.mark.parametrize(
   "change",
   (
@@ -283,6 +321,8 @@ def test_missing_provider_usage_remains_unknown(monkeypatch: pytest.MonkeyPatch)
     ({"base_url": 1}, "chat_base_url_invalid"),
     ({"api_version": 1}, "chat_api_version_invalid"),
     ({"temperature": True}, "chat_temperature_invalid"),
+    ({"reasoning_effort": "fast"}, "chat_reasoning_effort_invalid"),
+    ({"reasoning_effort": []}, "chat_reasoning_effort_invalid"),
     ({"timeout": "30"}, "chat_timeout_invalid"),
   ],
 )
@@ -293,6 +333,7 @@ def test_endpoint_families_fail_closed(change: dict[str, object], error: str) ->
     "api_version": None,
     "model": "reader-deployment",
     "temperature": None,
+    "reasoning_effort": None,
     "max_tokens": 20,
     "timeout": 30.0,
     **change,
@@ -316,6 +357,7 @@ def _config(**change: object) -> model.ModelConfig:
     "api_version": None,
     "model": "reader-deployment",
     "temperature": None,
+    "reasoning_effort": None,
     "max_tokens": 20,
     "timeout": 30.0,
     **change,

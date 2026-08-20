@@ -157,6 +157,8 @@ def test_plan_reports_exact_calls_without_credentials_or_writes(tmp_path: Path) 
       "1",
       "--model",
       "extractor-v1",
+      "--reasoning-effort",
+      "minimal",
       "--input-cost",
       "1",
       "--output-cost",
@@ -177,6 +179,7 @@ def test_plan_reports_exact_calls_without_credentials_or_writes(tmp_path: Path) 
   }
   assert plan["reserved_cost_usd"] > 0
   assert plan["fits_cost_cap"] is True
+  assert plan["config"]["request"]["reasoning_effort"] == "minimal"
   assert not tuple(tmp_path.iterdir())
 
 
@@ -203,9 +206,17 @@ def test_unknown_extraction_outcome_blocks_another_call(
   assert calls == 0
 
 
-def test_changed_model_cannot_reuse_extraction_state(
+@pytest.mark.parametrize(
+  "change",
+  (
+    ("--model", "different-model"),
+    ("--reasoning-effort", "minimal"),
+  ),
+)
+def test_changed_request_cannot_reuse_extraction_state(
   tmp_path: Path,
   monkeypatch: pytest.MonkeyPatch,
+  change: tuple[str, str],
 ) -> None:
   out = tmp_path / "extractor.jsonl"
   first = _args(out, "--limit", "1")
@@ -222,7 +233,7 @@ def test_changed_model_cannot_reuse_extraction_state(
     ),
   )
   extract._extract(first)
-  changed = _args(out, "--limit", "1", "--model", "different-model")
+  changed = _args(out, "--limit", "1", *change)
 
   with pytest.raises(extract.ExtractError, match="^extraction_resume_identity_mismatch$"):
     extract._extract(changed)
@@ -254,6 +265,7 @@ def _config() -> extract.bounded.Config:
     api_version=None,
     model="gpt-5",
     temperature=None,
+    reasoning_effort=None,
     max_tokens=1_000,
     timeout=120,
     input_cost=0,
