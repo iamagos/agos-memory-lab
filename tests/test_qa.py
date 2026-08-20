@@ -205,7 +205,7 @@ def test_request_identity_includes_azure_api_version() -> None:
   assert qa._reader_id(context, replace(config, api_version="2025-03-01-preview")) != qa._reader_id(context, config)
 
 
-def test_azure_uses_azure_key_by_default() -> None:
+def test_azure_uses_azure_key_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
   args = _args(
     "read",
     "--contexts",
@@ -220,7 +220,9 @@ def test_azure_uses_azure_key_by_default() -> None:
     "reader-v1",
   )
 
-  assert qa._key_env(args, config=qa._config(args)) == "AZURE_OPENAI_API_KEY"
+  monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-secret")
+
+  assert qa._key(args, config=qa._config(args)) == "azure-secret"
 
 
 def test_unknown_request_outcome_blocks_an_automatic_repeat(

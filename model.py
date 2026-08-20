@@ -5,7 +5,7 @@ import math
 import urllib.parse
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import Literal
+from typing import Any, Generic, Literal, TypeVar
 
 import httpx
 from openai import APIConnectionError, APIResponseValidationError, APIStatusError, AsyncOpenAI, OpenAIError
@@ -17,6 +17,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 
 Provider = Literal["openai", "azure"]
+OutputT = TypeVar("OutputT")
 API = "chat-completions"
 OPENAI_VERSION = version("openai")
 PYDANTIC_AI_VERSION = version("pydantic-ai-slim")
@@ -87,17 +88,48 @@ class ModelConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class ModelResult:
-  content: str
+class ModelResult(Generic[OutputT]):
+  content: OutputT
   model: str
   input_tokens: int | None
   output_tokens: int | None
   total_tokens: int | None
 
 
-def complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelResult:
+def complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelResult[str]:
+  result = _run_sync(prompt, output_type=str, config=config, api_key=api_key)
+  if not isinstance(result.content, str):
+    raise ModelError("chat_response_invalid")
+  content = result.content.strip()
+  if not content:
+    raise ModelError("chat_response_invalid")
+  return ModelResult(content, result.model, result.input_tokens, result.output_tokens, result.total_tokens)
+
+
+def structure(
+  prompt: str,
+  *,
+  output_type: type[OutputT],
+  config: ModelConfig,
+  api_key: str,
+) -> ModelResult[OutputT]:
+  if not isinstance(output_type, type):
+    raise ModelError("chat_output_type_invalid")
+  result = _run_sync(prompt, output_type=output_type, config=config, api_key=api_key)
+  if not isinstance(result.content, output_type):
+    raise ModelError("chat_response_invalid")
+  return ModelResult(result.content, result.model, result.input_tokens, result.output_tokens, result.total_tokens)
+
+
+def _run_sync(
+  prompt: str,
+  *,
+  output_type: type[Any],
+  config: ModelConfig,
+  api_key: str,
+) -> ModelResult[Any]:
   try:
-    return asyncio.run(_complete(prompt, config=config, api_key=api_key))
+    return asyncio.run(_run(prompt, output_type=output_type, config=config, api_key=api_key))
   except ModelHTTPError as exc:
     raise ModelError(f"chat_http_error:{exc.status_code}") from exc
   except ModelAPIError as exc:
@@ -114,22 +146,25 @@ def complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelResult:
     raise ModelError(f"chat_request_failed:{type(exc).__name__}") from exc
 
 
-async def _complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelResult:
+async def _run(
+  prompt: str,
+  *,
+  output_type: type[Any],
+  config: ModelConfig,
+  api_key: str,
+) -> ModelResult[Any]:
   async with _http(config) as http_client:
     provider = _provider(config, api_key=api_key, http_client=http_client)
     chat = OpenAIChatModel(config.model, provider=provider)
-    agent = Agent(chat, retries=0)
+    agent = Agent(chat, output_type=output_type, retries=0)
     result = await agent.run(
       prompt,
       model_settings=_settings(config, chat=chat),
       retries=0,
       usage_limits=UsageLimits(request_limit=1),
     )
-  if not isinstance(result.output, str):
-    raise ModelError("chat_response_invalid")
-  content = result.output.strip()
   response_model = result.response.model_name or config.model
-  if not content or not isinstance(response_model, str) or not response_model.strip():
+  if not isinstance(response_model, str) or not response_model.strip():
     raise ModelError("chat_response_invalid")
   usage = result.response.usage
   tokens = (usage.input_tokens, usage.output_tokens, usage.total_tokens)
@@ -137,7 +172,7 @@ async def _complete(prompt: str, *, config: ModelConfig, api_key: str) -> ModelR
     raise ModelError("chat_usage_invalid")
   if usage.total_tokens == 0:
     tokens = (None, None, None)
-  return ModelResult(content, response_model.strip(), *tokens)
+  return ModelResult(result.output, response_model.strip(), *tokens)
 
 
 def _settings(config: ModelConfig, *, chat: OpenAIChatModel) -> dict[str, float | int]:
