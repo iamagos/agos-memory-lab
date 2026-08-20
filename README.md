@@ -120,6 +120,11 @@ revision, model-tree hash, BM25 identity, RRF choice, limits, timings, raw
 retrieval metrics, governed metrics, and every kernel outcome. No Qdrant server
 or credential is required.
 
+Dense indexing uses `--dense-batch` from 1 to 256, defaulting to 32. The resolved
+value controls both index chunks and FastEmbed batches and is part of retriever
+and run identity. The default follows the frozen equivalence experiment in
+[#27](https://github.com/iamagos/agos-memory-lab/issues/27).
+
 Hybrid selection is one explicit graph plan: the fused RRF rank controls order,
 while every outcome retains the dense and lexical component ranks that reached
 that candidate. Component ranks are attribution evidence, not confidence or

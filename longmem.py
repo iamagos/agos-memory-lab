@@ -63,6 +63,8 @@ _DATASETS = {
   },
 }
 _CUTS = (1, 3, 5, 10, 50)
+_DEFAULT_DENSE_BATCH = 32
+_MAX_DENSE_BATCH = 256
 _Retriever = Literal["none", "recent", "full", "lexical", "oracle", "qdrant-dense", "qdrant-hybrid"]
 _Source = Literal["sessions", "memories"]
 
@@ -164,6 +166,11 @@ def _parser() -> argparse.ArgumentParser:
   run.add_argument("--chars", type=int, default=180_000, help="Maximum kernel context characters.")
   run.add_argument("--lexical-weight", type=int, default=0, help="Kernel lexical reranking weight.")
   run.add_argument("--model", default="BAAI/bge-small-en-v1.5", help="FastEmbed dense model.")
+  run.add_argument(
+    "--dense-batch",
+    type=int,
+    help=f"Qdrant index batch size; 1-{_MAX_DENSE_BATCH}, defaults to {_DEFAULT_DENSE_BATCH}.",
+  )
   run.add_argument("--cache", type=Path, default=Path("data/models"))
   run.add_argument("--out", type=Path)
   run.add_argument("--contexts", type=Path, help="Optional gold-free selected context JSONL.")
@@ -232,6 +239,7 @@ def _run(args: argparse.Namespace) -> None:
   episode_qdrant = None
   index_seconds = 0.0
   if args.retriever.startswith("qdrant-"):
+    dense_batch = args.dense_batch or _DEFAULT_DENSE_BATCH
     indexed = time.perf_counter()
     qdrant = _Qdrant(
       cases,
@@ -240,6 +248,7 @@ def _run(args: argparse.Namespace) -> None:
       model=args.model,
       cache=args.cache,
       text="user turns" if artifact is None else "memory text",
+      batch_size=dense_batch,
     )
     if args.episodes:
       try:
@@ -250,6 +259,7 @@ def _run(args: argparse.Namespace) -> None:
           model=args.model,
           cache=args.cache,
           text="user turns",
+          batch_size=dense_batch,
           embedder=qdrant.embedder,
         )
       except Exception:
@@ -1052,6 +1062,7 @@ class _Qdrant:
     model: str,
     cache: Path,
     text: str,
+    batch_size: int,
     embedder: Any | None = None,
   ) -> None:
     try:
@@ -1075,6 +1086,7 @@ class _Qdrant:
         "tokenizers": version("tokenizers"),
       },
       "dense": _model_identity(self.embedder),
+      "index_batch_size": batch_size,
       "fusion": (
         {"algorithm": "rrf", "k": 60, "lexical": _retriever_identity("lexical", text=text)}
         if hybrid
@@ -1094,9 +1106,12 @@ class _Qdrant:
         "dense": models.VectorParams(size=self.embedder.embedding_size, distance=models.Distance.COSINE)
       },
     )
-    for start in range(0, len(rows), 256):
-      batch = rows[start : start + 256]
-      dense_vectors = self.embedder.embed(entry.text for _, entry in batch)
+    for start in range(0, len(rows), batch_size):
+      batch = rows[start : start + batch_size]
+      dense_vectors = self.embedder.embed(
+        (entry.text for _, entry in batch),
+        batch_size=batch_size,
+      )
       points = [
         models.PointStruct(
           id=start + offset,
@@ -1262,6 +1277,11 @@ def _verify_file(path: Path, *, sha256: str, size: int) -> None:
 
 
 def _validate_run(args: argparse.Namespace) -> None:
+  if args.dense_batch is not None:
+    if not args.retriever.startswith("qdrant-"):
+      raise LongMemError("dense_batch_requires_qdrant")
+    if args.dense_batch < 1 or args.dense_batch > _MAX_DENSE_BATCH:
+      raise LongMemError("dense_batch_invalid")
   if args.episodes < 0 or args.episodes > args.top_k:
     raise LongMemError("episode_candidate_limit_invalid")
   if args.episodes and args.source != "memories":
