@@ -41,6 +41,7 @@ pins the benchmark code at
 ```text
 pinned sessions -----------------------------> raw retrieval
        `-> frozen extraction -> admit -> artifact -> memory retrieval
+                 current raw episode fallback -----'
                                                    |
                           BM25 or local Qdrant routes
                                                    v
@@ -52,9 +53,11 @@ pinned sessions -----------------------------> raw retrieval
                     run receipts: IDs/hashes, no selected text
 ```
 
-The raw-session path remains the unchanged control. Both paths use the same
-retriever, selection limits, reader, and judge; only the candidate text and its
-source-linked governance differ.
+The raw-session path remains the unchanged control. A memory run may add a
+tightly bounded raw-session candidate plane with `--episodes 1`. It admits only
+sessions at or before the question cutoff, records later sessions as exact
+omissions, and composes both planes through one kernel selection budget. The
+default is zero, so the memory-only treatment remains unchanged.
 
 The experiment has one baseline ladder. Each step changes one acquisition or
 retrieval choice while retaining the same reader and judge:
@@ -99,6 +102,18 @@ uv run --script longmem.py run \
   --limit 5
 ```
 
+Add one current episodic candidate to an extracted-memory treatment:
+
+```bash
+uv run --script longmem.py run \
+  --dataset s \
+  --source memories \
+  --artifact runs/memory.json \
+  --artifact-sha256 SHA256 \
+  --retriever qdrant-dense \
+  --episodes 1
+```
+
 The script-scoped dependencies keep Qdrant out of the lab and kernel runtime.
 Each receipt records the Qdrant and FastEmbed versions, exact model snapshot
 revision, model-tree hash, BM25 identity, RRF choice, limits, timings, raw
@@ -106,11 +121,11 @@ retrieval metrics, governed metrics, and every kernel outcome. No Qdrant server
 or credential is required.
 
 LongMemEval contains duplicate session IDs and a few timestamps later than the
-question time. The adapter therefore uses a unique occurrence ID internally,
-retains the official session ID for metrics, and treats inclusion in the
-released haystack—not its descriptive timestamp—as corpus availability. The
-optional contexts file contains the question and exact bounded selection text,
-including explicit truncation, but no gold answer.
+question time. The raw control treats inclusion in the released haystack as
+corpus availability. The episodic memory plane instead enforces the question
+cutoff. Both use a unique occurrence ID internally and retain the official
+session ID for metrics. The optional contexts file contains the question and
+exact bounded selection text, including explicit truncation, but no gold answer.
 
 `qa.py` owns the experiment, while `model.py` makes one pinned Pydantic AI Chat
 Completions request. It checkpoints after each response and resumes only when

@@ -108,6 +108,7 @@ def test_memory_run_reopens_source_linked_records_before_context(tmp_path: Path)
   update = receipt["cases"][1]
 
   assert receipt["config"]["source"] == "memories"
+  assert "episodes" not in receipt["config"]
   assert receipt["contexts"] == {
     "file": "memory-contexts.jsonl",
     "sha256": hashlib.sha256(contexts.read_bytes()).hexdigest(),
@@ -123,6 +124,7 @@ def test_memory_run_reopens_source_linked_records_before_context(tmp_path: Path)
     "reasons": {"duplicate": 1},
   }
   assert "selected_occurrence_ids" not in update
+  assert "selected_episode_occurrence_ids" not in update
   assert update["selected_session_ids"] == ["noise-2", "new-color"]
   assert update["selected_source_occurrence_ids"] == ["2:noise-2", "1:new-color"]
   assert [item["decision"] for item in update["kernel"]["retention"]] == ["retain", "retain"]
@@ -132,6 +134,63 @@ def test_memory_run_reopens_source_linked_records_before_context(tmp_path: Path)
   assert "blue" not in context["context"]
   assert "assistant:" not in context["context"]
   assert "answer" not in context
+
+
+def test_memory_run_adds_one_bounded_current_episode(tmp_path: Path) -> None:
+  artifact, artifact_sha256 = _artifact(tmp_path)
+  out = tmp_path / "mixed-receipt.json"
+  contexts = tmp_path / "mixed-contexts.jsonl"
+
+  _run(
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--source",
+    "memories",
+    "--artifact",
+    str(artifact),
+    "--artifact-sha256",
+    artifact_sha256,
+    "--retriever",
+    "lexical",
+    "--candidates",
+    "3",
+    "--top-k",
+    "2",
+    "--episodes",
+    "1",
+    "--out",
+    str(out),
+    "--contexts",
+    str(contexts),
+  )
+
+  receipt = json.loads(out.read_text())
+  context = {
+    value["question_id"]: value
+    for value in map(json.loads, contexts.read_text().splitlines())
+  }
+  degree, update = receipt["cases"][:2]
+
+  assert receipt["config"]["episodes"] == 1
+  assert degree["episode_omissions"] == [
+    {"source_occurrence_id": "2:answer-1", "reason": "after_cutoff"},
+  ]
+  assert "2:answer-1" not in degree["retrieved_episode_occurrence_ids"]
+  assert len(degree["selected_episode_occurrence_ids"]) <= 1
+  assert len(update["selected_memory_ids"]) + len(update["selected_episode_occurrence_ids"]) <= 2
+  assert set(update["selected_memory_ids"]) <= {
+    item["record_id"] for item in update["kernel"]["support"] if item["decision"] == "current"
+  }
+  assert set(update["selected_episode_occurrence_ids"]) <= {
+    session.source_id for session in longmem._load(FIXTURE)[1].sessions
+  }
+  assert "Session Date:" in context["update"]["context"]
+  assert context["update"]["context_sha256"] == update["kernel"]["content_sha256"]
 
 
 def test_memory_run_omits_an_expired_record_before_context(tmp_path: Path) -> None:
@@ -403,6 +462,28 @@ def test_candidate_limit_cannot_exceed_the_kernel_route_bound(tmp_path: Path) ->
 
   assert completed.returncode != 0
   assert completed.stderr.strip() == "candidate_limit_invalid"
+
+
+def test_episode_candidates_require_a_memory_run_and_fit_the_selection_bound(
+  tmp_path: Path,
+) -> None:
+  base = (
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--out",
+    str(tmp_path / "no.json"),
+  )
+
+  without_memory = _run(*base, "--episodes", "1", check=False)
+  over_selection_bound = _run(*base, "--episodes", "11", check=False)
+
+  assert without_memory.stderr.strip() == "episode_candidates_require_memories"
+  assert over_selection_bound.stderr.strip() == "episode_candidate_limit_invalid"
 
 
 def test_identical_inputs_have_one_semantic_run_identity(tmp_path: Path) -> None:

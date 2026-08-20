@@ -246,18 +246,22 @@ def _contract(sessions: dict[str, Any], memories: dict[str, Any]) -> dict[str, A
       raise CompareError(f"comparison_{field}_mismatch")
   session_config = _retrieval_contract(sessions["config"], source="sessions")
   memory_config = _retrieval_contract(memories["config"], source="memories")
+  episodes = memory_config.pop("episodes", 0)
   if session_config != memory_config:
     raise CompareError("comparison_retrieval_contract_mismatch")
   cases = _case_ids(sessions, error="sessions_cases_invalid")
   if cases != _case_ids(memories, error="memories_cases_invalid"):
     raise CompareError("comparison_case_window_mismatch")
-  return {
+  contract = {
     "benchmark": sessions["benchmark"],
     "dataset": sessions["dataset"],
     "kernel": sessions["kernel"],
     "cases": cases,
     "retrieval": session_config,
   }
+  if episodes:
+    contract["treatment"] = {"episode_candidates": episodes}
+  return contract
 
 
 def _retrieval_contract(value: Any, *, source: str) -> dict[str, Any]:
@@ -265,15 +269,41 @@ def _retrieval_contract(value: Any, *, source: str) -> dict[str, Any]:
   expected = set(_CONTROL_KEYS) | {"retriever_identity"}
   if source == "memories":
     expected |= {"source", "artifact"}
+    if "episodes" in config:
+      expected.add("episodes")
   if set(config) != expected:
     raise CompareError(f"{source}_config_invalid")
-  return {
-    **{key: config[key] for key in _CONTROL_KEYS},
-    "retriever_identity": _without_text(
-      config["retriever_identity"],
+  episodes = config.get("episodes", 0)
+  top_k = config.get("top_k")
+  if (
+    not isinstance(episodes, int)
+    or isinstance(episodes, bool)
+    or not isinstance(top_k, int)
+    or isinstance(top_k, bool)
+    or not 0 <= episodes <= top_k
+  ):
+    raise CompareError("memories_episode_candidates_invalid")
+  identity = config["retriever_identity"]
+  if episodes:
+    identity = _object(identity, error="memories_retriever_identity_invalid")
+    if set(identity) != {"memories", "episodes"}:
+      raise CompareError("memories_retriever_identity_invalid")
+    memory_identity = _without_text(identity["memories"], expected="memory text")
+    episode_identity = _without_text(identity["episodes"], expected="user turns")
+    if memory_identity != episode_identity:
+      raise CompareError("comparison_retrieval_contract_mismatch")
+  else:
+    memory_identity = _without_text(
+      identity,
       expected="user turns" if source == "sessions" else "memory text",
-    ),
+    )
+  contract = {
+    **{key: config[key] for key in _CONTROL_KEYS},
+    "retriever_identity": memory_identity,
   }
+  if episodes:
+    contract["episodes"] = episodes
+  return contract
 
 
 def _qa_contract(value: dict[str, Any]) -> dict[str, Any]:
