@@ -59,6 +59,14 @@ def test_comparison_reports_exact_retrieval_and_memory_artifact_evidence(tmp_pat
   assert renamed == receipt
 
 
+def test_comparison_records_a_bounded_episode_treatment(tmp_path: Path) -> None:
+  sessions, memories = _runs(tmp_path, memory_episodes=1)
+
+  receipt = compare._compare(_args(sessions, memories, out=tmp_path / "comparison.json"))
+
+  assert receipt["contract"]["treatment"] == {"episode_candidates": 1}
+
+
 def test_comparison_joins_reader_judge_economics_and_qa(tmp_path: Path) -> None:
   sessions, memories = _runs(tmp_path)
   session_read, session_judge = _qa_pair(tmp_path, "sessions", sessions, accuracy=0.5)
@@ -222,7 +230,12 @@ def test_comparison_rejects_an_unexpected_retrieval_text(tmp_path: Path) -> None
     compare._retrieval_contract(config, source="memories")
 
 
-def _runs(tmp_path: Path, *, memory_top_k: int = 2) -> tuple[Path, Path]:
+def _runs(
+  tmp_path: Path,
+  *,
+  memory_top_k: int = 2,
+  memory_episodes: int = 0,
+) -> tuple[Path, Path]:
   tmp_path.mkdir(parents=True, exist_ok=True)
   artifact = tmp_path / "memory.json"
   _command(
@@ -277,6 +290,7 @@ def _runs(tmp_path: Path, *, memory_top_k: int = 2) -> tuple[Path, Path]:
     artifact_sha256,
     "--top-k",
     str(memory_top_k),
+    *(("--episodes", str(memory_episodes)) if memory_episodes else ()),
     "--out",
     str(memories),
     "--contexts",

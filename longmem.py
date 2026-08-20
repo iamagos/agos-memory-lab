@@ -147,6 +147,12 @@ def _parser() -> argparse.ArgumentParser:
   run.add_argument("--limit", type=int, default=0, help="Number of cases; 0 means all.")
   run.add_argument("--candidates", type=int, default=50, help="Raw candidates per case; maximum 100.")
   run.add_argument("--top-k", type=int, default=10, help="Maximum kernel-selected sessions.")
+  run.add_argument(
+    "--episodes",
+    type=int,
+    default=0,
+    help="Current raw-session candidates per memory case; defaults to 0.",
+  )
   run.add_argument("--chars", type=int, default=180_000, help="Maximum kernel context characters.")
   run.add_argument("--lexical-weight", type=int, default=0, help="Kernel lexical reranking weight.")
   run.add_argument("--model", default="BAAI/bge-small-en-v1.5", help="FastEmbed dense model.")
@@ -207,9 +213,15 @@ def _run(args: argparse.Namespace) -> None:
     )
     for case in cases
   }
+  episode_entries_by_case = (
+    {case.question_id: _episode_entries(case) for case in cases}
+    if args.episodes
+    else {}
+  )
   load_seconds = time.perf_counter() - loaded
 
   qdrant = None
+  episode_qdrant = None
   index_seconds = 0.0
   if args.retriever.startswith("qdrant-"):
     indexed = time.perf_counter()
@@ -221,17 +233,42 @@ def _run(args: argparse.Namespace) -> None:
       cache=args.cache,
       text="user turns" if artifact is None else "memory text",
     )
+    if args.episodes:
+      try:
+        episode_qdrant = _Qdrant(
+          cases,
+          episode_entries_by_case,
+          hybrid=args.retriever == "qdrant-hybrid",
+          model=args.model,
+          cache=args.cache,
+          text="user turns",
+        )
+      except Exception:
+        qdrant.close()
+        raise
     index_seconds = time.perf_counter() - indexed
 
   query_seconds = 0.0
   kernel_seconds = 0.0
-  retriever_identity = (
+  primary_retriever_identity = (
     qdrant.identity
     if qdrant is not None
     else _retriever_identity(
       args.retriever,
       text="user turns" if artifact is None else "memory text",
     )
+  )
+  retriever_identity = (
+    {
+      "memories": primary_retriever_identity,
+      "episodes": (
+        episode_qdrant.identity
+        if episode_qdrant is not None
+        else _retriever_identity(args.retriever, text="user turns")
+      ),
+    }
+    if args.episodes
+    else primary_retriever_identity
   )
   results: list[dict[str, Any]] = []
   contexts: list[dict[str, Any]] = []
@@ -248,6 +285,25 @@ def _run(args: argparse.Namespace) -> None:
           retriever=args.retriever,
           limit=args.candidates,
         )
+      )
+      episode_entries = episode_entries_by_case.get(case.question_id, ())
+      episode_hits = (
+        (
+          episode_qdrant.retrieve(
+            case,
+            episode_entries,
+            limit=min(args.episodes, len(episode_entries)),
+          )
+          if episode_qdrant is not None
+          else _retrieve_episodes(
+            case,
+            episode_entries,
+            retriever=args.retriever,
+            limit=args.episodes,
+          )
+        )
+        if args.episodes
+        else ()
       )
       query_seconds += time.perf_counter() - queried
 
@@ -266,6 +322,7 @@ def _run(args: argparse.Namespace) -> None:
           case,
           memories_by_case.get(case.question_id, ()),
           hits,
+          episode_hits=episode_hits,
           artifact=artifact,
           source=source,
           retriever=args.retriever,
@@ -294,13 +351,17 @@ def _run(args: argparse.Namespace) -> None:
           for value in memories_by_case.get(case.question_id, ())
         }
         selected_ids = kernel["selected_memory_ids"]
+        episode_raw_ids = tuple(hit.source_id for hit in episode_hits)
+        episode_selected_ids = kernel["selected_episode_occurrence_ids"]
         raw_sources = tuple(by_id[record_id].session.source_id for record_id in raw_ids)
         selected_sources = tuple(by_id[record_id].session.source_id for record_id in selected_ids)
         raw_benchmark_ids = _unique(
           tuple(by_id[record_id].session.benchmark_id for record_id in raw_ids)
+          + tuple(_benchmark_id(case, source_id) for source_id in episode_raw_ids)
         )
         selected_benchmark_ids = _unique(
           tuple(by_id[record_id].session.benchmark_id for record_id in selected_ids)
+          + tuple(_benchmark_id(case, source_id) for source_id in episode_selected_ids)
         )
         context_ids = {
           "selected_memory_ids": selected_ids,
@@ -314,6 +375,24 @@ def _run(args: argparse.Namespace) -> None:
           "selected_source_occurrence_ids": selected_sources,
           "selected_session_ids": selected_benchmark_ids,
         }
+        if args.episodes:
+          episode_fields = {
+            "retrieved_episode_occurrence_ids": episode_raw_ids,
+            "selected_episode_occurrence_ids": episode_selected_ids,
+            "episode_omissions": tuple(
+              {
+                "source_occurrence_id": session.source_id,
+                "reason": "after_cutoff",
+              }
+              for session in case.sessions
+              if session.at > case.asked_at
+            ),
+          }
+          context_ids = {
+            **context_ids,
+            "selected_episode_occurrence_ids": episode_selected_ids,
+          }
+          result_ids = {**result_ids, **episode_fields}
       contexts.append(
         {
           "question_id": case.question_id,
@@ -341,6 +420,8 @@ def _run(args: argparse.Namespace) -> None:
   finally:
     if qdrant is not None:
       qdrant.close()
+    if episode_qdrant is not None:
+      episode_qdrant.close()
 
   config = {
     "retriever": args.retriever,
@@ -354,6 +435,8 @@ def _run(args: argparse.Namespace) -> None:
   }
   if artifact is not None:
     config = {**config, "source": "memories", "artifact": artifact.identity}
+  if args.episodes:
+    config = {**config, "episodes": args.episodes}
   semantic = {
     "schema": "agos-memory-lab-longmem-v1",
     "benchmark": {
@@ -504,6 +587,10 @@ def _session_entries(case: Case) -> tuple[Entry, ...]:
   )
 
 
+def _episode_entries(case: Case) -> tuple[Entry, ...]:
+  return tuple(entry for entry in _session_entries(case) if entry.at <= case.asked_at)
+
+
 def _memory_entries(values: tuple[Memory, ...]) -> tuple[Entry, ...]:
   return tuple(
     Entry(
@@ -553,6 +640,18 @@ def _retrieve_entries(
   return tuple(Hit(entry.source_id) for _, entry in ordered[:limit])
 
 
+def _retrieve_episodes(
+  case: Case,
+  entries: tuple[Entry, ...],
+  *,
+  retriever: _Retriever,
+  limit: int,
+) -> tuple[Hit, ...]:
+  if retriever == "full":
+    return tuple(Hit(entry.source_id) for entry in entries[:limit])
+  return _retrieve_entries(case, entries, retriever=retriever, limit=limit)
+
+
 def _rrf(case: Case, *rankings: tuple[Hit, ...], limit: int) -> tuple[Hit, ...]:
   return _rrf_entries(_session_entries(case), *rankings, limit=limit)
 
@@ -583,25 +682,7 @@ def _govern(
   by_id = {session.source_id: session for session in case.sessions}
   if any(hit.source_id not in by_id for hit in hits):
     raise LongMemError("retrieval_result_scope_mismatch")
-  items = tuple(
-    SelectionItem(
-      source="session",
-      source_id=hit.source_id,
-      partition="history",
-      kind="session",
-      text=by_id[hit.source_id].text,
-      content=(
-        f"Session Date: {by_id[hit.source_id].date}\nSession Content:\n{by_id[hit.source_id].content}"
-        if by_id[hit.source_id].content
-        else ""
-      ),
-      updated_at=by_id[hit.source_id].at,
-      available_at=None,
-      revision=by_id[hit.source_id].date,
-      source_digest=source_digest(by_id[hit.source_id].content),
-    )
-    for hit in hits
-  )
+  items = tuple(_session_item(by_id[hit.source_id]) for hit in hits)
   routes = tuple(
     SelectionRoute(
       source="session",
@@ -647,11 +728,30 @@ def _govern(
   }
 
 
+def _session_item(session: Session) -> SelectionItem:
+  return SelectionItem(
+    source="session",
+    source_id=session.source_id,
+    partition="history",
+    kind="session",
+    text=session.text,
+    content=(
+      f"Session Date: {session.date}\nSession Content:\n{session.content}"
+      if session.content
+      else ""
+    ),
+    updated_at=session.at,
+    revision=session.date,
+    source_digest=source_digest(session.content),
+  )
+
+
 def _govern_memory(
   case: Case,
   values: tuple[Memory, ...],
   hits: tuple[Hit, ...],
   *,
+  episode_hits: tuple[Hit, ...] = (),
   artifact: memory.Artifact,
   source: dict[str, Any],
   retriever: _Retriever,
@@ -664,6 +764,13 @@ def _govern_memory(
   by_id = {value.record.record_id: value for value in values}
   if any(hit.source_id not in by_id for hit in hits):
     raise LongMemError("retrieval_result_scope_mismatch")
+  sessions = {
+    session.source_id: session
+    for session in case.sessions
+    if session.at <= case.asked_at
+  }
+  if any(hit.source_id not in sessions for hit in episode_hits):
+    raise LongMemError("episode_retrieval_result_scope_mismatch")
   retained = {}
   reopened = {}
   items = []
@@ -697,6 +804,10 @@ def _govern_memory(
         omission="retention" if isinstance(decision, Omit) else None,
       )
     )
+  items.extend(
+    _session_item(sessions[hit.source_id])
+    for hit in episode_hits
+  )
   routes = tuple(
     SelectionRoute(
       source="memory",
@@ -707,19 +818,30 @@ def _govern_memory(
     )
     for rank, hit in enumerate(hits, start=1)
     if reopened[hit.source_id]["decision"] == "current"
+  ) + tuple(
+    SelectionRoute(
+      source="session",
+      source_id=hit.source_id,
+      lane=retriever,
+      rank=rank,
+      signal=retriever,
+    )
+    for rank, hit in enumerate(episode_hits, start=1)
   )
+  mixed = bool(episode_hits)
   selection = select(
     tuple(items),
     routes=routes,
     query=case.question,
     limits=SelectionLimits(max_items=top_k, max_chars=chars),
     policy=SelectionPolicy(
-      partitions=(SelectionPriority(label="case", score=0),),
+      partitions=(SelectionPriority(label="case", score=0),)
+      + ((SelectionPriority(label="history", score=0),) if mixed else ()),
       kinds=tuple(
         SelectionPriority(label=kind, score=0)
         for kind in sorted({item.kind for item in items})
       ),
-      source_order=("memory",),
+      source_order=("memory", "session") if mixed else ("memory",),
       route_order=(retriever,),
       lexical_weight=lexical_weight,
       route_rank_ceiling=100,
@@ -727,15 +849,22 @@ def _govern_memory(
     now=case.asked_at,
     include_paths=True,
   )
-  outcomes = tuple(_outcome(outcome) for outcome in selection.outcomes)
-  selected = tuple(
+  outcomes = tuple(_outcome(outcome, exact=mixed) for outcome in selection.outcomes)
+  selected_memory = tuple(
     outcome.candidate.source_id
     for outcome in sorted(selection.selected, key=lambda item: item.rank)
+    if outcome.candidate.source == "memory"
   )
-  if any(reopened[record_id]["decision"] != "current" for record_id in selected):
+  selected_episodes = tuple(
+    outcome.candidate.source_id
+    for outcome in sorted(selection.selected, key=lambda item: item.rank)
+    if outcome.candidate.source == "session"
+  )
+  if any(reopened[record_id]["decision"] != "current" for record_id in selected_memory):
     raise LongMemError("memory_selected_support_invalid")
   return {
-    "selected_memory_ids": selected,
+    "selected_memory_ids": selected_memory,
+    "selected_episode_occurrence_ids": selected_episodes,
     "content": selection.content,
     "receipt": {
       "content_chars": len(selection.content),
@@ -788,7 +917,7 @@ def _reopen(
   }
 
 
-def _outcome(outcome: Selected | Omitted) -> dict[str, Any]:
+def _outcome(outcome: Selected | Omitted, *, exact: bool = False) -> dict[str, Any]:
   candidate = outcome.candidate
   value = {
     "source_id": candidate.source_id,
@@ -805,6 +934,13 @@ def _outcome(outcome: Selected | Omitted) -> dict[str, Any]:
       for path in candidate.paths
     ),
   }
+  if exact:
+    value = {
+      **value,
+      "source": candidate.source,
+      "revision": candidate.revision,
+      "source_digest": candidate.source_digest,
+    }
   if isinstance(outcome, Selected):
     return {**value, "selected": True, "rank": outcome.rank, "content_chars": outcome.content_chars}
   return {**value, "selected": False, "reason": outcome.reason}
@@ -1096,6 +1232,10 @@ def _verify_file(path: Path, *, sha256: str, size: int) -> None:
 
 
 def _validate_run(args: argparse.Namespace) -> None:
+  if args.episodes < 0 or args.episodes > args.top_k:
+    raise LongMemError("episode_candidate_limit_invalid")
+  if args.episodes and args.source != "memories":
+    raise LongMemError("episode_candidates_require_memories")
   if args.source == "memories":
     if args.artifact is None or not args.artifact_sha256:
       raise LongMemError("memory_artifact_identity_required")
