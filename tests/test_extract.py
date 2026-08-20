@@ -30,7 +30,7 @@ def test_extractor_checkpoints_resumes_and_compiles_without_labels(
       else "The user bought a new bicycle."
     )
     return extract.chat_model.ModelResult(
-      extract.Batch(memories=(extract.Fact(kind="fact", text=text, confidence=1),)),
+      extract.Batch(memories=(text,)),
       "gpt-5-2025-08-07",
       100,
       20,
@@ -59,6 +59,8 @@ def test_extractor_checkpoints_resumes_and_compiles_without_labels(
   assert values[0]["config"]["mode"] == "live-additive"
   assert values[0]["config"]["request"]["model"] == "gpt-5"
   assert values[0]["config"]["response_models"] == ["gpt-5-2025-08-07"]
+  assert all(value["kind"] == "fact" for value in values[1:])
+  assert all(value["confidence"] == 1.0 for value in values[1:])
   assert all(value["supersedes"] == [] for value in values[1:])
   assert all("question" not in value and "answer" not in value for value in values)
   assert "secret" not in state
@@ -111,6 +113,18 @@ def test_extraction_jobs_ignore_question_answer_and_gold_labels(tmp_path: Path) 
   ]
   assert "changed benchmark question" not in "".join(job.prompt for job in altered)
   assert "changed gold answer" not in "".join(job.prompt for job in altered)
+
+
+def test_output_schema_changes_request_identity(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  args = _args(Path("extractor.jsonl"), "--limit", "1")
+  original = _jobs(args)
+
+  monkeypatch.setattr(extract, "_output_schema_sha256", lambda: "0" * 64)
+  changed = _jobs(args)
+
+  assert [job.request_id for job in original] != [job.request_id for job in changed]
 
 
 def test_extraction_cost_cap_blocks_before_key_or_call(
@@ -183,6 +197,24 @@ def test_plan_reports_exact_calls_without_credentials_or_writes(tmp_path: Path) 
   assert not tuple(tmp_path.iterdir())
 
 
+def test_model_output_is_only_bounded_memory_text() -> None:
+  schema = extract.Batch.model_json_schema()
+  memories = schema["properties"]["memories"]
+
+  assert memories["maxItems"] == 32
+  assert memories["items"] == {"type": "string"}
+  assert "kind" not in json.dumps(schema)
+  assert "confidence" not in json.dumps(schema)
+  assert extract.Batch(memories=("  The user   likes tea.  ",)).memories == (
+    "The user likes tea.",
+  )
+  assert extract.Batch(memories=(" ", "The user likes tea." * 100)).memories == (
+    "The user likes tea." * 100,
+  )
+  with pytest.raises(ValueError):
+    extract.Batch(memories=("x",) * 33)
+
+
 def test_unknown_extraction_outcome_blocks_another_call(
   tmp_path: Path,
   monkeypatch: pytest.MonkeyPatch,
@@ -237,6 +269,32 @@ def test_changed_request_cannot_reuse_extraction_state(
 
   with pytest.raises(extract.ExtractError, match="^extraction_resume_identity_mismatch$"):
     extract._extract(changed)
+
+
+def test_changed_output_schema_cannot_reuse_extraction_state(
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  out = tmp_path / "extractor.jsonl"
+  args = _args(out, "--limit", "1")
+  monkeypatch.setenv("TEST_EXTRACT_KEY", "secret")
+  monkeypatch.setattr(
+    extract,
+    "_chat",
+    lambda *_args, **_kwargs: extract.chat_model.ModelResult(
+      extract.Batch(memories=()),
+      "served-model",
+      10,
+      1,
+      11,
+    ),
+  )
+  extract._extract(args)
+
+  monkeypatch.setattr(extract, "_output_schema_sha256", lambda: "0" * 64)
+
+  with pytest.raises(extract.ExtractError, match="^extraction_resume_identity_mismatch$"):
+    extract._extract(args)
 
 
 def _args(out: Path, *extra: str) -> object:
