@@ -340,10 +340,12 @@ uv run python compare.py \
 
 Reader and judge pairs are optional, but never one-sided. The comparator
 requires the same benchmark, dataset window, retriever, candidate and context
-limits, kernel version, reader request, judge request, prices, and execution
-policy. It permits only the intentional retrieval-text difference: raw user
-turns versus admitted memory text. Each reader input hash must also match the
-exact context artifact named by its retrieval receipt.
+limits, kernel version, reader request, judge request, prices, timeout,
+concurrency, and retry policy. Completed runs may use different hard cost caps;
+the original signed receipts retain those safety ceilings. The comparator
+permits only the intentional retrieval-text difference: raw user turns versus
+admitted memory text. Each reader input hash must also match the exact context
+artifact named by its retrieval receipt.
 
 The receipt reports raw and governed retrieval metrics, context size, every
 retrieval timing, artifact/extractor identity, admission reasons, support
