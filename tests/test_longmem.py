@@ -193,6 +193,60 @@ def test_memory_run_adds_one_bounded_current_episode(tmp_path: Path) -> None:
   assert context["update"]["context_sha256"] == update["kernel"]["content_sha256"]
 
 
+def test_released_memory_run_can_select_a_future_dated_haystack_episode(tmp_path: Path) -> None:
+  rows = [json.loads(line) for line in EXTRACTOR.read_text().splitlines()]
+  rows[0]["config"]["availability"] = "released"
+  future = {**rows[1]}
+  future.update(
+    source_id="2:answer-1",
+    session_date="2024/01/03 (Wed) 13:00",
+    source_digest=memory.source_digest(
+      "user: I graduated with a degree in Business Administration.\n"
+      "assistant: Congratulations."
+    ),
+    proposal_id="degree-1",
+    text="The user earned a degree in Business Administration.",
+  )
+  extractor = tmp_path / "released.jsonl"
+  extractor.write_text(
+    "".join(f"{json.dumps(row, sort_keys=True)}\n" for row in [*rows, future])
+  )
+  artifact, artifact_sha256 = _artifact(tmp_path, extractor=extractor)
+  out = tmp_path / "released-receipt.json"
+
+  _run(
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--source",
+    "memories",
+    "--artifact",
+    str(artifact),
+    "--artifact-sha256",
+    artifact_sha256,
+    "--retriever",
+    "oracle",
+    "--candidates",
+    "3",
+    "--top-k",
+    "2",
+    "--episodes",
+    "1",
+    "--out",
+    str(out),
+  )
+
+  receipt = json.loads(out.read_text())
+  degree = receipt["cases"][0]
+  assert receipt["config"]["artifact"]["extractor"]["config"]["availability"] == "released"
+  assert degree["retrieved_episode_occurrence_ids"] == ["2:answer-1"]
+  assert degree["episode_omissions"] == []
+
+
 def test_memory_run_omits_an_expired_record_before_context(tmp_path: Path) -> None:
   rows = [json.loads(line) for line in EXTRACTOR.read_text().splitlines()]
   rows[4]["expires_days"] = 1

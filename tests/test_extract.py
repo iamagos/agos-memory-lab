@@ -57,6 +57,7 @@ def test_extractor_checkpoints_resumes_and_compiles_without_labels(
   assert first["summary"]["output_tokens"] == 40
   assert first["window"]["future_sources_omitted"] == 1
   assert values[0]["config"]["mode"] == "live-additive"
+  assert values[0]["config"]["availability"] == "causal"
   assert values[0]["config"]["request"]["model"] == "gpt-5"
   assert values[0]["config"]["response_models"] == ["gpt-5-2025-08-07"]
   assert all(value["kind"] == "fact" for value in values[1:])
@@ -167,6 +168,8 @@ def test_plan_reports_exact_calls_without_credentials_or_writes(tmp_path: Path) 
       FIXTURE_SHA256,
       "--revision",
       "fixture-v1",
+      "--availability",
+      "causal",
       "--limit",
       "1",
       "--model",
@@ -189,6 +192,7 @@ def test_plan_reports_exact_calls_without_credentials_or_writes(tmp_path: Path) 
     "offset": 0,
     "cases": 1,
     "sources": 2,
+    "availability": "causal",
     "future_sources_omitted": 1,
   }
   assert plan["reserved_cost_usd"] > 0
@@ -234,6 +238,19 @@ def test_specific_assistant_information_is_an_explicit_extraction_source() -> No
   assert "Preserve who supplied the information" in prompt
   assert "Preserve concrete examples, names, numbers, dates, and alternatives" in prompt
   assert "Biometric authentication and one-time passwords" in prompt
+
+
+def test_released_availability_includes_the_complete_benchmark_haystack() -> None:
+  args = _args(Path("extractor.jsonl"), "--limit", "1", "--availability", "released")
+  jobs = _jobs(args)
+
+  assert extract._parser().get_default("availability") == "released"
+  assert args.availability == "released"
+  assert [job.source_id for job in jobs] == ["0:noise-1", "1:noise-1", "2:answer-1"]
+  assert extract._future_omitted(
+    extract._window(memory._sources(longmem._load(FIXTURE)), offset=0, limit=1),
+    availability="released",
+  ) == 0
 
 
 def test_unknown_extraction_outcome_blocks_another_call(
@@ -326,6 +343,8 @@ def _args(out: Path, *extra: str) -> object:
     FIXTURE_SHA256,
     "--revision",
     "fixture-v1",
+    "--availability",
+    "causal",
     "--out",
     str(out),
     "--model",
@@ -361,7 +380,12 @@ def _jobs(args: object) -> tuple[extract.Job, ...]:
     offset=args.offset,
     limit=args.limit,
   )
-  return extract._jobs(cases, source=source, config=config)
+  return extract._jobs(
+    cases,
+    source=source,
+    config=config,
+    availability=args.availability,
+  )
 
 
 def _jsonl(path: Path) -> list[dict[str, object]]:

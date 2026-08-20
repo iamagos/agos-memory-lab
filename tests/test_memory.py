@@ -178,6 +178,43 @@ def test_extractor_line_order_does_not_change_semantic_artifact(tmp_path: Path) 
   assert reordered["run_id"] != baseline["run_id"]
 
 
+def test_released_availability_admits_a_future_dated_haystack_source(tmp_path: Path) -> None:
+  values = _extractor_values()
+  values[0]["config"]["availability"] = "released"
+  future = deepcopy(values[1])
+  future.update(
+    source_id="2:answer-1",
+    session_date="2024/01/03 (Wed) 13:00",
+    source_digest=source_digest(
+      "user: I graduated with a degree in Business Administration.\n"
+      "assistant: Congratulations."
+    ),
+    proposal_id="degree-1",
+    text="The user earned a degree in Business Administration.",
+  )
+  extractor = _write_jsonl(tmp_path / "released.jsonl", [*values, future])
+
+  _, receipt = _run(tmp_path, name="released", extractor=extractor)
+
+  degree = receipt["artifact"]["cases"][0]
+  assert degree["decisions"][-1]["source"]["fragment"] == "2:answer-1"
+  artifact = memory.load(
+    tmp_path / "released.json",
+    sha256=_file_digest(tmp_path / "released.json"),
+  )
+  assert artifact.availability == "released"
+
+
+def test_unknown_extractor_availability_fails_closed(tmp_path: Path) -> None:
+  values = _extractor_values()
+  values[0]["config"]["availability"] = "ambient"
+  extractor = _write_jsonl(tmp_path / "ambient.jsonl", values)
+
+  completed, _ = _run(tmp_path, name="ambient", extractor=extractor, check=False)
+
+  assert completed.stderr.strip() == "extractor_availability_invalid"
+
+
 @pytest.mark.parametrize(
   ("mutate", "error"),
   (
