@@ -242,6 +242,7 @@ def _run(args: argparse.Namespace) -> None:
           model=args.model,
           cache=args.cache,
           text="user turns",
+          embedder=qdrant.embedder,
         )
       except Exception:
         qdrant.close()
@@ -1028,6 +1029,7 @@ class _Qdrant:
     model: str,
     cache: Path,
     text: str,
+    embedder: Any | None = None,
   ) -> None:
     try:
       from fastembed import TextEmbedding
@@ -1038,7 +1040,7 @@ class _Qdrant:
     cache.mkdir(parents=True, exist_ok=True)
     self._models = models
     self._client = QdrantClient(":memory:")
-    self._dense = TextEmbedding(model, cache_dir=str(cache))
+    self.embedder = embedder if embedder is not None else TextEmbedding(model, cache_dir=str(cache))
     self._hybrid = hybrid
     self._collection = "longmem"
     self.identity = {
@@ -1049,7 +1051,7 @@ class _Qdrant:
         "onnxruntime": version("onnxruntime"),
         "tokenizers": version("tokenizers"),
       },
-      "dense": _model_identity(self._dense),
+      "dense": _model_identity(self.embedder),
       "fusion": (
         {"algorithm": "rrf", "k": 60, "lexical": _retriever_identity("lexical", text=text)}
         if hybrid
@@ -1066,12 +1068,12 @@ class _Qdrant:
     self._client.create_collection(
       self._collection,
       vectors_config={
-        "dense": models.VectorParams(size=self._dense.embedding_size, distance=models.Distance.COSINE)
+        "dense": models.VectorParams(size=self.embedder.embedding_size, distance=models.Distance.COSINE)
       },
     )
     for start in range(0, len(rows), 256):
       batch = rows[start : start + 256]
-      dense_vectors = self._dense.embed(entry.text for _, entry in batch)
+      dense_vectors = self.embedder.embed(entry.text for _, entry in batch)
       points = [
         models.PointStruct(
           id=start + offset,
@@ -1094,7 +1096,7 @@ class _Qdrant:
     if not entries:
       return ()
     models = self._models
-    dense = next(iter(self._dense.query_embed(case.question))).tolist()
+    dense = next(iter(self.embedder.query_embed(case.question))).tolist()
     query_filter = models.Filter(
       must=[models.FieldCondition(key="question_id", match=models.MatchValue(value=case.question_id))]
     )

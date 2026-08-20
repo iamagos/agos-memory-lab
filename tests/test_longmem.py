@@ -538,6 +538,59 @@ def test_qdrant_mode_fails_with_one_exact_setup_instruction(tmp_path: Path) -> N
   assert completed.stderr.strip() == "qdrant_dependency_missing:run_with_uv_script"
 
 
+def test_mixed_qdrant_reuses_one_embedder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  artifact, artifact_sha256 = _artifact(tmp_path)
+  embedders = []
+  closed = []
+
+  class FakeQdrant:
+    def __init__(self, _cases, _entries, *, text, embedder=None, **_options) -> None:
+      self.embedder = embedder or object()
+      self.identity = {"algorithm": "fake", "text": text}
+      embedders.append(self.embedder)
+
+    def retrieve(self, _case, entries, *, limit):
+      return tuple(longmem.Hit(entry.source_id) for entry in entries[:limit])
+
+    def close(self) -> None:
+      closed.append(self)
+
+  monkeypatch.setattr(longmem, "_Qdrant", FakeQdrant)
+  args = longmem._parser().parse_args(
+    [
+      "run",
+      "--file",
+      str(FIXTURE),
+      "--sha256",
+      FIXTURE_SHA256,
+      "--revision",
+      "fixture-v1",
+      "--source",
+      "memories",
+      "--artifact",
+      str(artifact),
+      "--artifact-sha256",
+      artifact_sha256,
+      "--retriever",
+      "qdrant-dense",
+      "--candidates",
+      "3",
+      "--top-k",
+      "2",
+      "--episodes",
+      "1",
+      "--out",
+      str(tmp_path / "mixed.json"),
+    ]
+  )
+
+  longmem._run(args)
+
+  assert len(embedders) == 2
+  assert embedders[0] is embedders[1]
+  assert len(closed) == 2
+
+
 def test_governance_rejects_a_retrieval_result_from_another_case() -> None:
   case = longmem._load(FIXTURE)[0]
 
