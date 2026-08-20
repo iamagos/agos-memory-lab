@@ -215,6 +215,27 @@ def test_model_output_is_only_bounded_memory_text() -> None:
     extract.Batch(memories=("x",) * 33)
 
 
+def test_specific_assistant_information_is_an_explicit_extraction_source() -> None:
+  prompt = extract._prompt(
+    memory.Source(
+      source_id="source-1",
+      date="2023/05/23 (Tue) 07:14",
+      at=longmem._date("2023/05/23 (Tue) 07:14"),
+      content=(
+        "user: What are examples of two-factor authentication?\n"
+        "assistant: Biometric authentication and one-time passwords are examples."
+      ),
+    )
+  )
+
+  assert extract._PROMPT_REVISION == "longmem-additive-v3"
+  assert "specific recommendations, instructions, solutions, researched facts" in prompt
+  assert "even when they are not personal facts about the user" in prompt
+  assert "Preserve who supplied the information" in prompt
+  assert "Preserve concrete examples, names, numbers, dates, and alternatives" in prompt
+  assert "Biometric authentication and one-time passwords" in prompt
+
+
 def test_unknown_extraction_outcome_blocks_another_call(
   tmp_path: Path,
   monkeypatch: pytest.MonkeyPatch,
