@@ -120,6 +120,11 @@ revision, model-tree hash, BM25 identity, RRF choice, limits, timings, raw
 retrieval metrics, governed metrics, and every kernel outcome. No Qdrant server
 or credential is required.
 
+Hybrid selection is one explicit graph plan: the fused RRF rank controls order,
+while every outcome retains the dense and lexical component ranks that reached
+that candidate. Component ranks are attribution evidence, not confidence or
+truth.
+
 LongMemEval contains duplicate session IDs and a few timestamps later than the
 question time. The raw control treats inclusion in the released haystack as
 corpus availability. The episodic memory plane instead enforces the question

@@ -616,9 +616,84 @@ def test_hybrid_fusion_is_bounded_and_deterministic() -> None:
   case = longmem._load(FIXTURE)[0]
   first, second, third = (longmem.Hit(session.source_id) for session in case.sessions)
 
-  fused = longmem._rrf(case, (first, second), (second, third), limit=3)
+  fused = longmem._rrf(
+    case,
+    longmem.Ranking("dense", (first, second)),
+    longmem.Ranking("lexical", (second, third)),
+    limit=3,
+  )
 
-  assert fused == (second, first, third)
+  assert tuple(hit.source_id for hit in fused) == (
+    second.source_id,
+    first.source_id,
+    third.source_id,
+  )
+  assert fused[0].paths == (
+    longmem.SelectionPath(lane="dense", rank=2, signal="retrieved"),
+    longmem.SelectionPath(lane="lexical", rank=1, signal="retrieved"),
+  )
+  assert fused[2].paths == (
+    longmem.SelectionPath(lane="lexical", rank=2, signal="retrieved"),
+  )
+
+
+def test_hybrid_component_paths_survive_governed_selection() -> None:
+  case = longmem._load(FIXTURE)[0]
+  hit = longmem.Hit(
+    case.sessions[0].source_id,
+    (
+      longmem.SelectionPath(lane="qdrant-dense", rank=3, signal="retrieved"),
+      longmem.SelectionPath(lane="lexical", rank=1, signal="retrieved"),
+    ),
+  )
+
+  result = longmem._govern(
+    case,
+    (hit,),
+    retriever="qdrant-hybrid",
+    top_k=1,
+    chars=10_000,
+    lexical_weight=0,
+  )
+  plain = longmem._govern(
+    case,
+    (longmem.Hit(hit.source_id),),
+    retriever="qdrant-hybrid",
+    top_k=1,
+    chars=10_000,
+    lexical_weight=0,
+  )
+
+  assert result["selected_occurrence_ids"] == plain["selected_occurrence_ids"]
+  assert result["content"] == plain["content"]
+  assert result["receipt"]["outcomes"][0]["paths"] == (
+    {
+      "lane": "qdrant-hybrid",
+      "rank": 1,
+      "signal": "qdrant-hybrid",
+      "relation": None,
+    },
+    {
+      "lane": "qdrant-dense",
+      "rank": 3,
+      "signal": "retrieved",
+      "relation": None,
+    },
+    {
+      "lane": "lexical",
+      "rank": 1,
+      "signal": "retrieved",
+      "relation": None,
+    },
+  )
+
+
+def test_hybrid_fusion_rejects_duplicate_component_identity() -> None:
+  case = longmem._load(FIXTURE)[0]
+  hit = longmem.Hit(case.sessions[0].source_id)
+
+  with pytest.raises(longmem.LongMemError, match="^rrf_ranking_identity_duplicated$"):
+    longmem._rrf(case, longmem.Ranking("dense", (hit, hit)), limit=1)
 
 
 def _artifact(tmp_path: Path, *, extractor: Path = EXTRACTOR) -> tuple[Path, str]:
