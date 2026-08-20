@@ -37,6 +37,10 @@ def arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
   parser.add_argument("--api-version")
   parser.add_argument("--api-key-env")
   parser.add_argument("--temperature", type=float)
+  parser.add_argument(
+    "--reasoning-effort",
+    choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+  )
   parser.add_argument("--max-tokens", type=int, default=default_tokens)
   parser.add_argument("--timeout", type=float, default=120.0)
   parser.add_argument("--input-cost", type=float, default=0.0, help="USD per million input tokens.")
@@ -55,6 +59,7 @@ def config(args: argparse.Namespace) -> Config:
       api_version=args.api_version,
       model=args.model,
       temperature=args.temperature,
+      reasoning_effort=args.reasoning_effort,
       max_tokens=args.max_tokens,
       timeout=args.timeout,
       input_cost=args.input_cost,
@@ -80,7 +85,7 @@ def key(args: argparse.Namespace, *, config: Config) -> str:
 
 
 def request(config: Config) -> dict[str, Any]:
-  return {
+  value = {
     "adapter": {
       "api": model.API,
       "openai": model.OPENAI_VERSION,
@@ -93,6 +98,9 @@ def request(config: Config) -> dict[str, Any]:
     "temperature": config.temperature,
     "max_tokens": config.max_tokens,
   }
+  if config.reasoning_effort is not None:
+    value["reasoning_effort"] = config.reasoning_effort
+  return value
 
 
 def execution(config: Config) -> dict[str, Any]:

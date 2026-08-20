@@ -17,6 +17,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 
 Provider = Literal["openai", "azure"]
+Reasoning = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 OutputT = TypeVar("OutputT")
 API = "chat-completions"
 OPENAI_VERSION = version("openai")
@@ -34,6 +35,7 @@ class ModelConfig:
   api_version: str | None
   model: str
   temperature: float | None
+  reasoning_effort: Reasoning | None
   max_tokens: int
   timeout: float
 
@@ -78,6 +80,11 @@ class ModelConfig:
       not _number(self.temperature) or not math.isfinite(self.temperature) or self.temperature < 0
     ):
       raise ModelError("chat_temperature_invalid")
+    if self.reasoning_effort is not None and (
+      not isinstance(self.reasoning_effort, str)
+      or self.reasoning_effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+    ):
+      raise ModelError("chat_reasoning_effort_invalid")
     if not isinstance(self.max_tokens, int) or isinstance(self.max_tokens, bool) or self.max_tokens < 1:
       raise ModelError("chat_token_limit_invalid")
     if not _number(self.timeout) or not math.isfinite(self.timeout) or self.timeout <= 0:
@@ -139,7 +146,7 @@ def _run_sync(
   except APIConnectionError as exc:
     raise ModelError(f"chat_request_failed:{type(exc).__name__}") from exc
   except UnexpectedModelBehavior as exc:
-    raise ModelError("chat_response_invalid") from exc
+    raise ModelError(_unexpected(exc)) from exc
   except APIResponseValidationError as exc:
     raise ModelError("chat_response_invalid") from exc
   except OpenAIError as exc:
@@ -175,8 +182,10 @@ async def _run(
   return ModelResult(result.output, response_model.strip(), *tokens)
 
 
-def _settings(config: ModelConfig, *, chat: OpenAIChatModel) -> dict[str, float | int]:
-  settings: dict[str, float | int] = {"max_tokens": config.max_tokens}
+def _settings(config: ModelConfig, *, chat: OpenAIChatModel) -> dict[str, float | int | str]:
+  settings: dict[str, float | int | str] = {"max_tokens": config.max_tokens}
+  if config.reasoning_effort is not None:
+    settings["openai_reasoning_effort"] = config.reasoning_effort
   if config.temperature is None:
     return settings
   profile = chat.profile
@@ -186,6 +195,14 @@ def _settings(config: ModelConfig, *, chat: OpenAIChatModel) -> dict[str, float 
     raise ModelError("chat_temperature_unsupported")
   settings["temperature"] = config.temperature
   return settings
+
+
+def _unexpected(error: UnexpectedModelBehavior) -> str:
+  if error.message.startswith("Model token limit"):
+    return "chat_output_limit_exceeded"
+  if error.message.startswith("Exceeded maximum output retries"):
+    return "chat_output_invalid"
+  return "chat_response_invalid"
 
 
 def _http(config: ModelConfig) -> httpx.AsyncClient:

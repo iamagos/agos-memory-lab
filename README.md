@@ -221,6 +221,7 @@ uv run python extract.py \
   --provider azure \
   --base-url https://RESOURCE.openai.azure.com/openai/v1 \
   --model gpt-5 \
+  --reasoning-effort minimal \
   --input-cost INPUT_USD_PER_MILLION \
   --output-cost OUTPUT_USD_PER_MILLION \
   --max-cost HARD_USD_CAP
@@ -242,6 +243,7 @@ uv run python extract.py \
   --provider azure \
   --base-url https://RESOURCE.openai.azure.com/openai/v1 \
   --model gpt-5 \
+  --reasoning-effort minimal \
   --input-cost INPUT_USD_PER_MILLION \
   --output-cost OUTPUT_USD_PER_MILLION \
   --max-cost HARD_USD_CAP

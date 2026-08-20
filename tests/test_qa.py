@@ -174,6 +174,7 @@ def test_request_identity_excludes_execution_policy() -> None:
     },
     {"model": "reader-v2"},
     {"temperature": 0.5},
+    {"reasoning_effort": "minimal"},
     {"max_tokens": 999},
   ],
 )
@@ -195,6 +196,7 @@ def test_request_identity_includes_azure_api_version() -> None:
     api_version="2025-04-01-preview",
     model="reader-v1",
     temperature=None,
+    reasoning_effort=None,
     max_tokens=1_000,
     timeout=120,
     input_cost=0,
@@ -376,6 +378,7 @@ def _chat_config() -> qa.ChatConfig:
     api_version=None,
     model="reader-v1",
     temperature=None,
+    reasoning_effort=None,
     max_tokens=1_000,
     timeout=120,
     input_cost=0,
