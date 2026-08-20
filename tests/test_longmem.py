@@ -538,16 +538,49 @@ def test_qdrant_mode_fails_with_one_exact_setup_instruction(tmp_path: Path) -> N
   assert completed.stderr.strip() == "qdrant_dependency_missing:run_with_uv_script"
 
 
+@pytest.mark.parametrize(
+  ("arguments", "error"),
+  (
+    (("--dense-batch", "32"), "dense_batch_requires_qdrant"),
+    (("--retriever", "qdrant-dense", "--dense-batch", "0"), "dense_batch_invalid"),
+    (("--retriever", "qdrant-dense", "--dense-batch", "257"), "dense_batch_invalid"),
+  ),
+)
+def test_dense_batch_is_positive_bounded_and_qdrant_only(
+  arguments: tuple[str, ...],
+  error: str,
+) -> None:
+  args = longmem._parser().parse_args(("run", *arguments))
+
+  with pytest.raises(longmem.LongMemError, match=f"^{error}$"):
+    longmem._validate_run(args)
+
+
 def test_mixed_qdrant_reuses_one_embedder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   artifact, artifact_sha256 = _artifact(tmp_path)
   embedders = []
+  batch_sizes = []
   closed = []
 
   class FakeQdrant:
-    def __init__(self, _cases, _entries, *, text, embedder=None, **_options) -> None:
+    def __init__(
+      self,
+      _cases,
+      _entries,
+      *,
+      text,
+      batch_size,
+      embedder=None,
+      **_options,
+    ) -> None:
       self.embedder = embedder or object()
-      self.identity = {"algorithm": "fake", "text": text}
+      self.identity = {
+        "algorithm": "fake",
+        "text": text,
+        "index_batch_size": batch_size,
+      }
       embedders.append(self.embedder)
+      batch_sizes.append(batch_size)
 
     def retrieve(self, _case, entries, *, limit):
       return tuple(longmem.Hit(entry.source_id) for entry in entries[:limit])
@@ -585,10 +618,81 @@ def test_mixed_qdrant_reuses_one_embedder(tmp_path: Path, monkeypatch: pytest.Mo
   )
 
   longmem._run(args)
+  receipt = json.loads((tmp_path / "mixed.json").read_text())
 
   assert len(embedders) == 2
   assert embedders[0] is embedders[1]
+  assert batch_sizes == [32, 32]
+  assert receipt["config"]["retriever_identity"]["memories"]["index_batch_size"] == 32
+  assert receipt["config"]["retriever_identity"]["episodes"]["index_batch_size"] == 32
   assert len(closed) == 2
+
+
+def test_qdrant_index_uses_and_identifies_one_explicit_batch(
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  model = tmp_path / "model"
+  model.mkdir()
+  (model / "weights").write_text("fixed")
+  embedded = []
+  upserts = []
+
+  def embed(texts, *, batch_size):
+    values = tuple(texts)
+    embedded.append((values, batch_size))
+    return tuple(
+      SimpleNamespace(tolist=lambda index=index: [index])
+      for index, _ in enumerate(values)
+    )
+
+  embedder = SimpleNamespace(
+    embedding_size=1,
+    model_name="fake",
+    model=SimpleNamespace(_model_dir=model),
+    embed=embed,
+  )
+  client = SimpleNamespace(
+    create_collection=lambda *_args, **_kwargs: None,
+    upsert=lambda _collection, *, points, wait: upserts.append((points, wait)),
+  )
+
+  models = SimpleNamespace(
+    Distance=SimpleNamespace(COSINE="cosine"),
+    VectorParams=lambda **values: values,
+    PointStruct=lambda **values: values,
+  )
+  monkeypatch.setitem(
+    sys.modules,
+    "fastembed",
+    SimpleNamespace(TextEmbedding=lambda *_args, **_kwargs: embedder),
+  )
+  monkeypatch.setitem(
+    sys.modules,
+    "qdrant_client",
+    SimpleNamespace(QdrantClient=lambda _location: client, models=models),
+  )
+  monkeypatch.setattr(longmem, "version", lambda package: f"{package}-version")
+  cases = longmem._load(FIXTURE)[:2]
+  entries = {
+    case.question_id: longmem._session_entries(case)[:3]
+    for case in cases
+  }
+
+  qdrant = longmem._Qdrant(
+    cases,
+    entries,
+    hybrid=False,
+    model="fake",
+    cache=tmp_path / "cache",
+    text="user turns",
+    batch_size=2,
+  )
+
+  assert qdrant.identity["index_batch_size"] == 2
+  assert [len(values) for values, _ in embedded] == [2, 2, 2]
+  assert {batch_size for _, batch_size in embedded} == {2}
+  assert [len(points) for points, _ in upserts] == [2, 2, 2]
 
 
 def test_governance_rejects_a_retrieval_result_from_another_case() -> None:
