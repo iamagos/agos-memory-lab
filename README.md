@@ -88,6 +88,27 @@ uv run python longmem.py run \
   --contexts runs/lexical-contexts.jsonl
 ```
 
+Segment A uses a checked-in, source-bound 30-case manifest for cheap protocol
+qualification. It contains five cases from each of the six question types and
+records the attainable abstention count in every type. Verify it against the
+pinned corpus, then pass the same manifest to retrieval and extraction:
+
+```bash
+uv run python case_manifest.py verify \
+  --dataset s \
+  --manifest manifests/longmemeval-s-balanced-30-v1.json
+
+uv run python longmem.py run \
+  --dataset s \
+  --manifest manifests/longmemeval-s-balanced-30-v1.json \
+  --retriever lexical \
+  --contexts runs/segment-a-lexical-contexts.jsonl
+```
+
+The manifest is applied before `--offset` and `--limit`; its SHA-256 and exact
+strata are bound into receipts. It is a qualification sample, not the final
+full-corpus score.
+
 The raw BM25 order matches the official session/user implementation, including
 its descending-index tie rule. The kernel receives that order as explicit
 `SelectionRoute` values. Its default lexical weight is zero so it applies
@@ -170,8 +191,9 @@ uv run python qa.py judge \
 ```
 
 The default OpenAI credential is `OPENAI_API_KEY`. A local compatible server can
-use `OPENAI_API_KEY=EMPTY --base-url http://127.0.0.1:8001/v1`. Azure uses the
-deployment name as `--model` and defaults to `AZURE_OPENAI_API_KEY`:
+use `--provider-id local-vllm --api-key-env LOCAL_LLM_API_KEY --base-url
+http://127.0.0.1:8001/v1`. Azure uses the deployment name as `--model` and
+defaults to `AZURE_OPENAI_API_KEY`:
 
 ```bash
 uv run python qa.py read \
@@ -205,6 +227,50 @@ to omitted; `null` in the receipt means no temperature was sent. A temperature
 that a known model profile would discard fails before network I/O. Both actual
 and reserved cost remain visible. Request identity also records the exact
 Pydantic AI and OpenAI adapter versions.
+
+## Compatible endpoint qualification
+
+`provider=openai` names the Chat Completions wire adapter. `--provider-id`
+separately names the service in every request identity and is required for a
+custom endpoint. `--max-tokens-field` freezes whether the adapter sends
+`max_completion_tokens` or legacy `max_tokens`.
+
+Before extraction, plan and then explicitly authorize one strict structured
+output qualification call. Planning reads no credential, writes no file, and
+makes no request:
+
+```bash
+uv run python qualify.py --plan \
+  --provider-id moonshot \
+  --base-url https://api.moonshot.ai/v1 \
+  --api-key-env MOONSHOT_API_KEY \
+  --model kimi-k2.6
+
+uv run python qualify.py --plan \
+  --provider-id deepseek \
+  --base-url https://api.deepseek.com/beta \
+  --api-key-env DEEPSEEK_API_KEY \
+  --model deepseek-v4-flash \
+  --max-tokens-field max_tokens
+
+uv run python qualify.py --plan \
+  --provider-id alibaba-dashscope \
+  --base-url https://dashscope-us.aliyuncs.com/compatible-mode/v1 \
+  --api-key-env DASHSCOPE_API_KEY \
+  --model qwen-flash
+```
+
+The live form additionally requires `--out`, prices, and a positive hard cap
+when either price is nonzero. A passing receipt proves this harness observed one
+strict tool call, a schema-valid nonce, a served-model identity, and usage. It
+does not establish model quality. DeepSeek documents strict tool schemas on its
+beta endpoint and the legacy token-limit field; Kimi documents strict tools and
+`max_completion_tokens`. These commands have only been planned here, not run
+against paid services. See the current
+[DeepSeek](https://api-docs.deepseek.com/guides/tool_calls),
+[Kimi](https://platform.kimi.ai/docs/api/tool-use), and
+[Alibaba Model Studio](https://help.aliyun.com/zh/model-studio/base-url)
+documentation before a live qualification.
 
 The judge copies the task-specific and abstention behavior from the pinned
 [official evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/evaluate_qa.py),

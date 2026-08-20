@@ -651,7 +651,7 @@ def _digest(value: Any) -> str:
 def _write(path: Path, value: dict[str, Any]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+  partial.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
   os.replace(partial, path)
 
 

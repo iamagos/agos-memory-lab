@@ -134,6 +134,31 @@ def test_explicit_reasoning_effort_is_sent(monkeypatch: pytest.MonkeyPatch) -> N
   assert json.loads(requests[0].content)["reasoning_effort"] == "minimal"
 
 
+def test_compatible_endpoint_can_use_legacy_max_tokens_field(monkeypatch: pytest.MonkeyPatch) -> None:
+  requests: list[httpx.Request] = []
+
+  def respond(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json=_response(), request=request)
+
+  _transport(monkeypatch, respond)
+
+  result = model.complete(
+    "hello",
+    config=_config(
+      base_url="https://compatible.example/v1",
+      max_tokens_field="max_tokens",
+    ),
+    api_key="secret",
+  )
+
+  body = json.loads(requests[0].content)
+  assert body["max_tokens"] == 20
+  assert "max_completion_tokens" not in body
+  assert result.model == "served-model"
+  assert result.total_tokens == 15
+
+
 @pytest.mark.parametrize(
   "message,error",
   (
@@ -323,6 +348,7 @@ def test_missing_provider_usage_remains_unknown(monkeypatch: pytest.MonkeyPatch)
     ({"temperature": True}, "chat_temperature_invalid"),
     ({"reasoning_effort": "fast"}, "chat_reasoning_effort_invalid"),
     ({"reasoning_effort": []}, "chat_reasoning_effort_invalid"),
+    ({"max_tokens_field": "other"}, "chat_token_limit_field_invalid"),
     ({"timeout": "30"}, "chat_timeout_invalid"),
   ],
 )
@@ -335,6 +361,7 @@ def test_endpoint_families_fail_closed(change: dict[str, object], error: str) ->
     "temperature": None,
     "reasoning_effort": None,
     "max_tokens": 20,
+    "max_tokens_field": "max_completion_tokens",
     "timeout": 30.0,
     **change,
   }
@@ -359,6 +386,7 @@ def _config(**change: object) -> model.ModelConfig:
     "temperature": None,
     "reasoning_effort": None,
     "max_tokens": 20,
+    "max_tokens_field": "max_completion_tokens",
     "timeout": 30.0,
     **change,
   }

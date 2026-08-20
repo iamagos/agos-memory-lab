@@ -12,12 +12,14 @@ from openai import APIConnectionError, APIResponseValidationError, APIStatusErro
 from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimits
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.azure import AzureProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 
 Provider = Literal["openai", "azure"]
 Reasoning = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+TokenLimitField = Literal["max_completion_tokens", "max_tokens"]
 OutputT = TypeVar("OutputT")
 API = "chat-completions"
 OPENAI_VERSION = version("openai")
@@ -37,6 +39,7 @@ class ModelConfig:
   temperature: float | None
   reasoning_effort: Reasoning | None
   max_tokens: int
+  max_tokens_field: TokenLimitField
   timeout: float
 
   def __post_init__(self) -> None:
@@ -87,6 +90,8 @@ class ModelConfig:
       raise ModelError("chat_reasoning_effort_invalid")
     if not isinstance(self.max_tokens, int) or isinstance(self.max_tokens, bool) or self.max_tokens < 1:
       raise ModelError("chat_token_limit_invalid")
+    if self.max_tokens_field not in {"max_completion_tokens", "max_tokens"}:
+      raise ModelError("chat_token_limit_field_invalid")
     if not _number(self.timeout) or not math.isfinite(self.timeout) or self.timeout <= 0:
       raise ModelError("chat_timeout_invalid")
     object.__setattr__(self, "base_url", base_url)
@@ -162,7 +167,12 @@ async def _run(
 ) -> ModelResult[Any]:
   async with _http(config) as http_client:
     provider = _provider(config, api_key=api_key, http_client=http_client)
-    chat = OpenAIChatModel(config.model, provider=provider)
+    profile = (
+      OpenAIModelProfile(openai_chat_supports_max_completion_tokens=False)
+      if config.max_tokens_field == "max_tokens"
+      else None
+    )
+    chat = OpenAIChatModel(config.model, provider=provider, profile=profile)
     agent = Agent(chat, output_type=output_type, retries=0)
     result = await agent.run(
       prompt,

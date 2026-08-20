@@ -359,12 +359,14 @@ def _args(out: Path, *extra: str) -> object:
 def _config() -> extract.bounded.Config:
   return extract.bounded.Config(
     provider="openai",
+    provider_id="openai",
     base_url="https://api.openai.com/v1",
     api_version=None,
     model="gpt-5",
     temperature=None,
     reasoning_effort=None,
     max_tokens=1_000,
+    max_tokens_field="max_completion_tokens",
     timeout=120,
     input_cost=0,
     output_cost=0,
