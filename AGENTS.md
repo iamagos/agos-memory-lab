@@ -34,6 +34,21 @@ clever golf, and speculative architecture.
 - Project guidance specializes these defaults but cannot weaken privacy or the
   high-impact boundary below.
 
+## Contributions
+
+- Make the change easy to accept: one purpose, a clear win, and exact proof.
+- Do not open a pull request as a working notebook. Open it when the change is
+  coherent and ready to merge.
+- Do not mix prerequisite refactors with behavior changes. Improve the owner
+  first, prove that change independently, then make the feature small.
+- Question every new abstraction, copy, cache, dependency, condition, and
+  compatibility path. If it owns no necessary fact, remove it.
+- Bugs need regression tests. Correctness and performance claims need
+  reproducible evidence.
+- Disclose material AI assistance. You remain responsible for every line and
+  claim.
+- Read the repository's `CONTRIBUTING.md` before changing it when one exists.
+
 ## Design
 
 - **Tiny core, wide reach:** identify the primitives; everything else is
