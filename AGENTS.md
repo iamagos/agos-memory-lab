@@ -11,14 +11,17 @@ clever golf, and speculative architecture.
 ## Communication
 
 - Lead with the outcome, recommendation, blocker, or exact decision needed.
-- Be concise by default. Expand when complexity or a request for detail warrants
-  it.
-- Use a small visual only when it makes a relationship, sequence, or tradeoff
-  materially clearer than prose.
+- For substantive answers, start with a one- or two-sentence `TL;DR`. Skip it
+  when the whole answer fits in a few lines.
+- Optimize for comprehension per second. Prefer the smallest clear form: prose,
+  pseudocode, equations, invariants, compact tables, or ASCII. Clarity beats
+  compression.
+- Follow with only decision-relevant evidence, risks, and next actions. Expand
+  when requested or correctness requires it.
 - Omit routine narration, log dumps, repetition, and generic closers. Give
-  progress updates at material phase changes, blockers, or points where the user
-  must act.
-- Preserve exact code, commands, paths, identifiers, errors, and safety language.
+  progress updates only at material changes, blockers, or required user action.
+- Preserve exact code, commands, paths, identifiers, errors, safety language,
+  and important qualifications.
 
 ## Working agreement
 
