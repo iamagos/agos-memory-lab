@@ -509,6 +509,18 @@ time, and every call carries `--max-cost` as the real-time guard.
 
 ## Order of execution
 
+### Execution checkpoint — 2026-08-21
+
+E0, E5, E1, and E2 have completed without a model call. The exact custom
+dataset and received artifact validate; the artifact covers only ten cases, so
+E4 has no disjoint holdout. The 2,400-character memory lane is semantically
+reader-testable on four of six answerable cases, while two cases lack sufficient
+selected evidence. Speaker attribution is explicit in 98.5% of active records
+and in every selected abstention memory, so E2 does not license a role field.
+
+The paid reader ladder is paused. The decision, exact acquisition request, and
+next representation gate are recorded in `segment-b-artifact-decision.md`.
+
 0. **Free. Done 2026-08-20.** PR #22 cherry-picked as `10c1755` and the working
    tree renormalised to LF. Suite 134 passed, `ruff check` clean, `smoke.py`
    exit 0. Gate 1 verifies the manifest at `sha256:3806648c…`; Gate 2's plan

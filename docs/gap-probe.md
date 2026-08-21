@@ -203,6 +203,22 @@ Measured in this repository on 2026-08-21:
   10 custom-subset cases, 6,027 proposals, 5,990 active records, 37 rejects,
   and zero replacements. It is measured evidence for write-path inertness on
   this artifact only.
+- The artifact-bound ten-case dataset was reconstructed byte-for-byte from the
+  pinned corpus. Its 5,375,901 bytes hash to
+  `167ecba4f48342bc75edb052b4848837032468011cee8ffb8d60aa2d6f4a4843`.
+  At 2,400 through 24,000 memory-context characters, literal operand coverage
+  stayed at 3/6 answerable cases. Manual audit found 4/6 semantically
+  reader-testable: `6071bd76` contains both ratios despite failing the literal
+  check; `09ba9854` lacks the taxi operand and `195a1a1b` misses the preference
+  evidence.
+- A deterministic attribution audit found explicit `User` and/or `Assistant`
+  markers in 5,899/5,990 active records. None of the 53 memories selected across
+  the four 2,400-character abstention contexts was unattributed. G2 is therefore
+  falsified on this artifact and does not license a `role` field.
+- At equal 2,400-character budgets, memories retained 3/6 literal operands and
+  raw sessions retained 1/6. At 24,000 characters, memories stayed at 3/6 while
+  raw sessions reached 4/6 and semantically supported all six. This supports a
+  bounded verbatim-evidence experiment, not replacement of memory compression.
 - One approved DeepSeek request targeted
   `https://api.deepseek.com/beta/chat/completions`, requested
   `deepseek-v4-flash`, allowed 64 output tokens, and had a `$0.001` hard cap.
