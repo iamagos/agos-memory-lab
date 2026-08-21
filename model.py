@@ -14,10 +14,11 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.azure import AzureProvider
+from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 
-Provider = Literal["openai", "azure"]
+Provider = Literal["openai", "azure", "deepseek"]
 Reasoning = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 TokenLimitField = Literal["max_completion_tokens", "max_tokens"]
 OutputT = TypeVar("OutputT")
@@ -43,7 +44,7 @@ class ModelConfig:
   timeout: float
 
   def __post_init__(self) -> None:
-    if not isinstance(self.provider, str) or self.provider not in {"openai", "azure"}:
+    if not isinstance(self.provider, str) or self.provider not in {"openai", "azure", "deepseek"}:
       raise ModelError("chat_provider_invalid")
     if (
       not isinstance(self.base_url, str)
@@ -70,7 +71,7 @@ class ModelConfig:
     api_version = self.api_version.strip() if isinstance(self.api_version, str) else None
     if api_version == "" or (api_version is not None and _unsafe(api_version)):
       raise ModelError("chat_api_version_invalid")
-    if self.provider == "openai" and api_version is not None:
+    if self.provider in {"openai", "deepseek"} and api_version is not None:
       raise ModelError("chat_api_version_unexpected")
     if self.provider == "azure":
       if _v1_url(base_url) is not None and api_version is not None:
@@ -221,15 +222,19 @@ def _http(config: ModelConfig) -> httpx.AsyncClient:
 
 def _provider(
   config: ModelConfig, *, api_key: str, http_client: httpx.AsyncClient
-) -> OpenAIProvider | AzureProvider:
-  if config.provider == "openai":
+) -> OpenAIProvider | AzureProvider | DeepSeekProvider:
+  if config.provider != "azure":
     client = AsyncOpenAI(
       base_url=config.base_url,
       api_key=api_key,
       http_client=http_client,
       max_retries=0,
     )
-    return OpenAIProvider(openai_client=client)
+    return (
+      DeepSeekProvider(openai_client=client)
+      if config.provider == "deepseek"
+      else OpenAIProvider(openai_client=client)
+    )
   provider = AzureProvider(
     azure_endpoint=config.base_url,
     api_version=config.api_version,

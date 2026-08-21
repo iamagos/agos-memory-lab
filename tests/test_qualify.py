@@ -10,6 +10,8 @@ import qualify
 def test_plan_freezes_custom_endpoint_without_credentials_or_writes(tmp_path: Path) -> None:
   args = _args(
     "--plan",
+    "--provider",
+    "deepseek",
     "--provider-id",
     "deepseek",
     "--base-url",
@@ -27,6 +29,7 @@ def test_plan_freezes_custom_endpoint_without_credentials_or_writes(tmp_path: Pa
   plan = qualify._plan(args)
 
   assert plan["calls"] == 1
+  assert plan["config"]["request"]["provider"] == "deepseek"
   assert plan["config"]["request"]["provider_id"] == "deepseek"
   assert plan["config"]["request"]["model"] == "deepseek-chat"
   assert plan["reserved_cost_usd"] > 0

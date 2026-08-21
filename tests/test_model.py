@@ -106,6 +106,63 @@ def test_structured_completion_uses_one_strict_output_tool(monkeypatch: pytest.M
   ]
 
 
+def test_deepseek_structured_completion_avoids_unsupported_required_tool_choice(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  requests: list[httpx.Request] = []
+
+  def respond(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    body = json.loads(request.content)
+    name = body["tools"][0]["function"]["name"]
+    return httpx.Response(
+      200,
+      json={
+        **_response(),
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": None,
+              "tool_calls": [
+                {
+                  "id": "call-1",
+                  "type": "function",
+                  "function": {
+                    "name": name,
+                    "arguments": json.dumps({"memories": ["one"]}),
+                  },
+                }
+              ],
+            },
+            "finish_reason": "tool_calls",
+          }
+        ],
+      },
+      request=request,
+    )
+
+  _transport(monkeypatch, respond)
+  model.structure(
+    "hello",
+    output_type=Structured,
+    config=_config(
+      provider="deepseek",
+      base_url="https://api.deepseek.com/beta",
+      model="deepseek-v4-flash",
+      max_tokens_field="max_tokens",
+    ),
+    api_key="secret",
+  )
+
+  assert len(requests) == 1
+  assert str(requests[0].url) == "https://api.deepseek.com/beta/chat/completions"
+  body = json.loads(requests[0].content)
+  assert body["tool_choice"] == "auto"
+  assert body["tools"][0]["function"]["strict"] is True
+
+
 def test_explicit_supported_temperature_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
   requests: list[httpx.Request] = []
 

@@ -7,6 +7,7 @@ import call
 
 def test_official_services_receive_stable_default_identities() -> None:
   assert call.config(_args("--model", "gpt-5")).provider_id == "openai"
+  assert call.config(_args("--provider", "deepseek", "--model", "deepseek-v4-flash")).provider_id == "deepseek"
   assert call.config(
     _args(
       "--provider",
@@ -17,6 +18,13 @@ def test_official_services_receive_stable_default_identities() -> None:
       "deployment",
     )
   ).provider_id == "azure-openai"
+
+
+def test_deepseek_provider_uses_isolated_default_key(monkeypatch: pytest.MonkeyPatch) -> None:
+  args = _args("--provider", "deepseek", "--model", "deepseek-v4-flash")
+  monkeypatch.setenv("DEEPSEEK_API_KEY", "secret")
+
+  assert call.key(args, config=call.config(args)) == "secret"
 
 
 def test_custom_compatible_endpoint_requires_explicit_service_identity() -> None:

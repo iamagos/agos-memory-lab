@@ -38,7 +38,7 @@ class CallError(Exception):
 
 
 def arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
-  parser.add_argument("--provider", choices=("openai", "azure"), default="openai")
+  parser.add_argument("--provider", choices=("openai", "azure", "deepseek"), default="openai")
   parser.add_argument(
     "--provider-id",
     help="Stable service identity for receipts (for example deepseek, moonshot, or local-vllm).",
@@ -65,7 +65,10 @@ def arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
 
 
 def config(args: argparse.Namespace) -> Config:
-  default_base_url = "https://api.openai.com/v1" if args.provider == "openai" else None
+  default_base_url = {
+    "openai": "https://api.openai.com/v1",
+    "deepseek": "https://api.deepseek.com",
+  }.get(args.provider)
   base_url = args.base_url or default_base_url
   if base_url is None:
     raise CallError("chat_base_url_required")
@@ -76,7 +79,11 @@ def config(args: argparse.Namespace) -> Config:
     and base_url.rstrip("/") != default_base_url
   )
   if provider_id is None:
-    provider_id = "openai" if args.provider == "openai" else "azure-openai"
+    provider_id = {
+      "openai": "openai",
+      "azure": "azure-openai",
+      "deepseek": "deepseek",
+    }[args.provider]
   try:
     value = Config(
       provider=args.provider,
@@ -101,11 +108,18 @@ def config(args: argparse.Namespace) -> Config:
 
 
 def key(args: argparse.Namespace, *, config: Config) -> str:
-  if args.api_key_env is None and config.provider_id not in {"openai", "azure-openai"}:
+  default_id = {
+    "azure": "azure-openai",
+    "deepseek": "deepseek",
+    "openai": "openai",
+  }[config.provider]
+  if args.api_key_env is None and config.provider_id != default_id:
     raise CallError("chat_api_key_env_required")
-  name = args.api_key_env or (
-    "AZURE_OPENAI_API_KEY" if config.provider == "azure" else "OPENAI_API_KEY"
-  )
+  name = args.api_key_env or {
+    "azure": "AZURE_OPENAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "openai": "OPENAI_API_KEY",
+  }[config.provider]
   if not isinstance(name, str) or not name.strip():
     raise CallError("chat_api_key_env_invalid")
   value = os.getenv(name)
