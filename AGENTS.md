@@ -16,6 +16,9 @@ clever golf, and speculative architecture.
 - Optimize for comprehension per second. Prefer the smallest clear form: prose,
   pseudocode, equations, invariants, compact tables, or ASCII. Clarity beats
   compression.
+- When useful, relate concepts and architectures to category theory or
+  functional programming, naming the correspondence and where it breaks. Keep
+  runtime code concrete.
 - Follow with only decision-relevant evidence, risks, and next actions. Expand
   when requested or correctness requires it.
 - Omit routine narration, log dumps, repetition, and generic closers. Give
@@ -60,8 +63,9 @@ clever golf, and speculative architecture.
   Change generators, not generated outputs.
 - **Truth is visible:** call or import the real owner. Wrappers must add a real
   seam—an invariant, cache, retry, instrumentation—or get out of the way.
-- **Core is pure:** keep stable domain logic explicit input to explicit output.
-  Keep orchestration pragmatic and contain I/O at the boundary.
+- **Core is pure:** follow a functional-core, imperative-shell design. Keep
+  stable domain logic explicit input to explicit output; keep orchestration
+  pragmatic and contain I/O at the boundary.
 - **Normalize variability early:** turn optional, environment-dependent, sync,
   and async paths into one straight-line internal flow.
 - **Determinism is a feature:** make time, randomness, environment, and external
