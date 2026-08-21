@@ -310,6 +310,7 @@ def test_official_judge_scores_and_exact_resume_makes_no_second_call(
   assert len(calls) == 3
   assert summary["accuracy"] == 1.0
   assert summary["task_accuracy"] == 1.0
+  assert summary["benchmark_weighted_accuracy"] == 1.0
   assert summary["abstention_accuracy"] == 1.0
   assert summary["by_type"]["single-session-user"] == {"cases": 2, "accuracy": 1.0}
   assert summary["by_type"]["knowledge-update"] == {"cases": 1, "accuracy": 1.0}
@@ -372,6 +373,75 @@ def test_completed_actual_cost_releases_unused_reservation() -> None:
 def test_official_label_is_reported_separately_from_strict_parse() -> None:
   assert qa._labels("not yes") == (True, None)
   assert qa._labels("No. The answer is unsupported.") == (False, False)
+
+
+def test_reader_prompt_revision_is_bound_to_prompt_request_and_receipt(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  contexts = tmp_path / "contexts.jsonl"
+  out = tmp_path / "hypotheses.jsonl"
+  _write_jsonl(contexts, [_context("degree", "What degree?", "Business Administration")])
+  control = _args("read", "--contexts", str(contexts), "--out", str(out), "--model", "reader-v1")
+  exact = _args(
+    "read",
+    "--contexts",
+    str(contexts),
+    "--out",
+    str(out),
+    "--model",
+    "reader-v1",
+    "--reader-prompt",
+    "longmem-exact-v1",
+  )
+  context = qa._contexts(contexts)[0][0]
+  config = qa._config(control)
+  prompts: list[str] = []
+  monkeypatch.setenv("OPENAI_API_KEY", "secret")
+  monkeypatch.setattr(
+    qa,
+    "_chat",
+    lambda prompt, **_kwargs: (
+      prompts.append(prompt) or qa.ChatResult("FINAL ANSWER: Business Administration", "reader-v1", 20, 3, 23)
+    ),
+  )
+
+  assert control.reader_prompt == qa._PROMPT_REVISION
+  assert qa._reader_id(context, config) != qa._reader_id(
+    context,
+    config,
+    prompt_revision="longmem-exact-v1",
+  )
+  qa._read(exact)
+
+  receipt = json.loads(out.with_suffix(".jsonl.receipt.json").read_text())
+  assert prompts and "FINAL ANSWER" in prompts[0]
+  assert receipt["prompt_revision"] == "longmem-exact-v1"
+
+
+def test_benchmark_weighted_accuracy_uses_population_strata() -> None:
+  population = tuple(
+    [qa.Reference(str(index), "single-session-user", "q", "a", False) for index in range(9)]
+    + [qa.Reference("missing_abs", "single-session-user", "q", "a", True)]
+  )
+  records = [
+    {
+      "question_type": "single-session-user",
+      "abstention": False,
+      "official_label": False,
+      "strict_label": False,
+    },
+    {
+      "question_type": "single-session-user",
+      "abstention": True,
+      "official_label": True,
+      "strict_label": True,
+    },
+  ]
+
+  scores = qa._scores(records, population=population)
+
+  assert scores["accuracy"] == 0.5
+  assert scores["benchmark_weighted_accuracy"] == 0.1
 
 
 def _args(*values: str):

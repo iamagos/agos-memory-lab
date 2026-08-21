@@ -174,6 +174,11 @@ def _parser() -> argparse.ArgumentParser:
     type=int,
     help=f"Qdrant index batch size; 1-{_MAX_DENSE_BATCH}, defaults to {_DEFAULT_DENSE_BATCH}.",
   )
+  run.add_argument(
+    "--dense-full-turns",
+    action="store_true",
+    help="Embed user and assistant turns for dense session retrieval; the default embeds user turns only.",
+  )
   run.add_argument("--cache", type=Path, default=Path("data/models"))
   run.add_argument("--out", type=Path)
   run.add_argument("--contexts", type=Path, help="Optional gold-free selected context JSONL.")
@@ -229,6 +234,11 @@ def _run(args: argparse.Namespace) -> None:
     )
     for case in cases
   }
+  dense_entries_by_case = (
+    {case.question_id: _session_entries(case, full_turns=True) for case in cases}
+    if args.dense_full_turns
+    else entries_by_case
+  )
   episode_entries_by_case = (
     {
       case.question_id: _episode_entries(
@@ -250,11 +260,11 @@ def _run(args: argparse.Namespace) -> None:
     indexed = time.perf_counter()
     qdrant = _Qdrant(
       cases,
-      entries_by_case,
+      dense_entries_by_case,
       hybrid=args.retriever == "qdrant-hybrid",
       model=args.model,
       cache=args.cache,
-      text="user turns" if artifact is None else "memory text",
+      text=("full turns" if args.dense_full_turns else "user turns") if artifact is None else "memory text",
       batch_size=dense_batch,
     )
     if args.episodes:
@@ -465,6 +475,9 @@ def _run(args: argparse.Namespace) -> None:
     config = {**config, "source": "memories", "artifact": artifact.identity}
   if args.episodes:
     config = {**config, "episodes": args.episodes}
+  if args.dense_full_turns:
+    config = {**config, "dense_full_turns": True}
+  summary = _summary(results)
   semantic = {
     "schema": "agos-memory-lab-longmem-v1",
     "benchmark": {
@@ -480,10 +493,10 @@ def _run(args: argparse.Namespace) -> None:
     },
     "kernel": version("agos-memory"),
     "config": config,
-    "summary": _summary(results),
+    "summary": summary,
     "cases": results,
   }
-  run_id = _digest(semantic)
+  run_id = _digest({**semantic, "summary": _identity_summary(summary)})
   context_output = None
   if args.contexts is not None:
     context_output = {
@@ -603,12 +616,12 @@ def _load_memories(
   }
 
 
-def _session_entries(case: Case) -> tuple[Entry, ...]:
+def _session_entries(case: Case, *, full_turns: bool = False) -> tuple[Entry, ...]:
   return tuple(
     Entry(
       source_id=session.source_id,
       benchmark_id=session.benchmark_id,
-      text=session.text,
+      text=session.content if full_turns else session.text,
       at=session.at,
     )
     for session in case.sessions
@@ -1072,9 +1085,29 @@ def _selection_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     "truncated_cases": sum(result["kernel"]["truncated"] for result in results),
     "mean_candidates": round(fmean(result["kernel"]["source_count"] for result in results), 8),
     "mean_selected": round(fmean(result["kernel"]["included_count"] for result in results), 8),
+    "mean_selected_items": round(fmean(_selected_item_count(result) for result in results), 8),
+    "mean_distinct_sessions": round(
+      fmean(len(set(result["selected_session_ids"])) for result in results),
+      8,
+    ),
     "mean_content_chars": round(fmean(result["kernel"]["content_chars"] for result in results), 8),
     "outcomes": dict(sorted(reasons.items())),
   }
+
+
+def _selected_item_count(result: dict[str, Any]) -> int:
+  return len(result.get("selected_memory_ids", result.get("selected_occurrence_ids", ()))) + len(
+    result.get("selected_episode_occurrence_ids", ())
+  )
+
+
+def _identity_summary(summary: dict[str, Any]) -> dict[str, Any]:
+  selection = {
+    key: value
+    for key, value in summary["selection"].items()
+    if key not in {"mean_selected_items", "mean_distinct_sessions"}
+  }
+  return {**summary, "selection": selection}
 
 
 class _Qdrant:
@@ -1113,7 +1146,14 @@ class _Qdrant:
       "dense": _model_identity(self.embedder),
       "index_batch_size": batch_size,
       "fusion": (
-        {"algorithm": "rrf", "k": 60, "lexical": _retriever_identity("lexical", text=text)}
+        {
+          "algorithm": "rrf",
+          "k": 60,
+          "lexical": _retriever_identity(
+            "lexical",
+            text="user turns" if text == "full turns" else text,
+          ),
+        }
         if hybrid
         else None
       ),
@@ -1329,6 +1369,8 @@ def _verify_file(path: Path, *, sha256: str, size: int) -> None:
 
 
 def _validate_run(args: argparse.Namespace) -> None:
+  if args.dense_full_turns and (not args.retriever.startswith("qdrant-") or args.source != "sessions"):
+    raise LongMemError("dense_full_turns_requires_qdrant_sessions")
   if args.dense_batch is not None:
     if not args.retriever.startswith("qdrant-"):
       raise LongMemError("dense_batch_requires_qdrant")

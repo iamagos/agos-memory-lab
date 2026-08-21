@@ -230,9 +230,11 @@ Pydantic AI and OpenAI adapter versions.
 
 ## Compatible endpoint qualification
 
-`provider=openai` names the Chat Completions wire adapter. `--provider-id`
-separately names the service in every request identity and is required for a
-custom endpoint. `--max-tokens-field` freezes whether the adapter sends
+`provider=openai` names the generic Chat Completions wire adapter;
+`provider=deepseek` uses the same wire protocol with Pydantic AI's DeepSeek
+compatibility profile. `--provider-id` separately names the service in every
+request identity and is required for a custom generic endpoint.
+`--max-tokens-field` freezes whether the adapter sends
 `max_completion_tokens` or legacy `max_tokens`.
 
 Before extraction, plan and then explicitly authorize one strict structured
@@ -247,10 +249,12 @@ uv run python qualify.py --plan \
   --model kimi-k2.6
 
 uv run python qualify.py --plan \
+  --provider deepseek \
   --provider-id deepseek \
   --base-url https://api.deepseek.com/beta \
   --api-key-env DEEPSEEK_API_KEY \
   --model deepseek-v4-flash \
+  --max-tokens 1024 \
   --max-tokens-field max_tokens
 
 uv run python qualify.py --plan \
@@ -265,8 +269,15 @@ when either price is nonzero. A passing receipt proves this harness observed one
 strict tool call, a schema-valid nonce, a served-model identity, and usage. It
 does not establish model quality. DeepSeek documents strict tool schemas on its
 beta endpoint and the legacy token-limit field; Kimi documents strict tools and
-`max_completion_tokens`. These commands have only been planned here, not run
-against paid services. See the current
+`max_completion_tokens`. An authorized DeepSeek qualification attempt on
+2026-08-21 used the generic `openai` profile and returned HTTP 400 before a
+success receipt. The likely cause is that the generic profile forced
+`tool_choice=required`, which DeepSeek V4 does not support in thinking mode.
+The DeepSeek profile now downgrades that field to `auto`. A second authorized
+attempt passed request validation but exhausted its 64-token output limit.
+A 1,024-token qualification then succeeded with returned model
+`deepseek-v4-flash`, strict nonce validation, complete usage, and measured cost
+`$0.00008064`. The Kimi and Alibaba commands remain plan-only. See the current
 [DeepSeek](https://api-docs.deepseek.com/guides/tool_calls),
 [Kimi](https://platform.kimi.ai/docs/api/tool-use), and
 [Alibaba Model Studio](https://help.aliyun.com/zh/model-studio/base-url)
@@ -279,6 +290,145 @@ information and still pass if it also contains the update. The official score
 is therefore benchmark comparability, not proof of correction safety. The
 receipt also reports strict yes/no parse diagnostics without changing the
 official label.
+
+## Gap probes and endpoint profiles
+
+`probe.py` derives reader-testability, failure codes, and retrieval-score
+answerability signals from existing artifacts. It reads no credential and makes
+no model request:
+
+```bash
+uv run python probe.py check-operand \
+  --contexts runs/longmem-s-sessions-lexical-contexts.jsonl \
+  --dataset s \
+  --out runs/longmem-s-operands.json
+
+uv run python probe.py answerability \
+  --receipt runs/longmem-s-sessions-lexical.json \
+  --dataset s \
+  --out runs/longmem-s-answerability.json
+```
+
+The three reader/judge endpoint profiles are below. Values in capitals are
+deployment facts that must be resolved without changing the fixed flags around
+them. A custom endpoint always has a non-default `--provider-id` and an explicit
+credential environment variable; neither value is persisted.
+
+Local reader profile:
+
+```bash
+uv run python qa.py read \
+  --contexts runs/CONTEXTS.jsonl \
+  --out runs/local-READER_PROMPT.jsonl \
+  --reader-prompt longmem-direct-v1 \
+  --provider openai \
+  --provider-id local-vllm \
+  --base-url http://127.0.0.1:8001/v1 \
+  --api-key-env LOCAL_LLM_API_KEY \
+  --model LOCAL_SERVED_MODEL \
+  --max-tokens 1000 \
+  --max-cost 0
+```
+
+DeepSeek V4 Flash qualification plan and reader profile. The requested variant
+string is pinned as `deepseek-v4-flash`; it is not an endpoint-qualified served
+identity until a live qualification receipt says so. On 2026-08-21 the official
+price page lists $0.14/M cache-miss input and $0.28/M output; re-read it and
+replace the price placeholders immediately before approval:
+
+```bash
+uv run python qualify.py --plan \
+  --provider deepseek \
+  --provider-id deepseek \
+  --base-url https://api.deepseek.com/beta \
+  --api-key-env DEEPSEEK_API_KEY \
+  --model deepseek-v4-flash \
+  --max-tokens 1024 \
+  --max-tokens-field max_tokens \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost QUALIFICATION_HARD_USD_CAP
+
+uv run python qa.py read \
+  --contexts runs/CONTEXTS.jsonl \
+  --out runs/deepseek-v4-flash-READER_PROMPT.jsonl \
+  --reader-prompt longmem-direct-v1 \
+  --provider deepseek \
+  --provider-id deepseek \
+  --base-url https://api.deepseek.com/beta \
+  --api-key-env DEEPSEEK_API_KEY \
+  --model deepseek-v4-flash \
+  --max-tokens 1000 \
+  --max-tokens-field max_tokens \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost READER_HARD_USD_CAP
+```
+
+Azure judge-parity profile. `gpt-5.6-sol` is the intended deployment; the
+resource endpoint and actual deployment name are environment-owned. A 64-token
+completion budget leaves room for reasoning while remaining inside the reported
+1,000-TPM ceiling for the measured judge prompts:
+
+```bash
+uv run python qa.py judge \
+  --hypotheses runs/HYPOTHESES.jsonl \
+  --dataset s \
+  --out runs/azure-gpt-5.6-sol-evaluation.jsonl \
+  --provider azure \
+  --base-url https://AZURE_RESOURCE.openai.azure.com/openai/v1 \
+  --model gpt-5.6-sol \
+  --reasoning-effort minimal \
+  --max-tokens 64 \
+  --input-cost INPUT_USD_PER_MILLION \
+  --output-cost OUTPUT_USD_PER_MILLION \
+  --max-cost JUDGE_HARD_USD_CAP
+```
+
+For an unmetered local prompt sweep, iterate the frozen registry in a fixed
+order. Each revision writes a separate checkpoint and receipt:
+
+```bash
+for revision in \
+  longmem-direct-v1 \
+  longmem-exact-v1 \
+  longmem-exact-abstain-v1 \
+  longmem-judge-then-solve-v1
+do
+  uv run python qa.py read \
+    --contexts runs/CONTEXTS.jsonl \
+    --out "runs/local-${revision}.jsonl" \
+    --reader-prompt "$revision" \
+    --provider openai \
+    --provider-id local-vllm \
+    --base-url http://127.0.0.1:8001/v1 \
+    --api-key-env LOCAL_LLM_API_KEY \
+    --model LOCAL_SERVED_MODEL \
+    --max-tokens 1000 \
+    --max-cost 0
+done
+```
+
+For a paced hosted run, grow a single prefix by one case per iteration. That
+makes exactly one new request while retaining one resumable output; set the
+interval from the endpoint's current limits:
+
+```bash
+for limit in $(seq 1 CASE_COUNT)
+do
+  uv run python qa.py read \
+    --contexts runs/CONTEXTS.jsonl \
+    --out runs/HOSTED-REVISION.jsonl \
+    --limit "$limit" \
+    HOSTED_PROFILE_FLAGS
+  sleep MINIMUM_INTERVAL_SECONDS
+done
+```
+
+Planning is always allowed because it reads no credential and sends no request.
+A live DeepSeek qualification/reader call or Azure judge call requires explicit
+approval of the exact endpoint, model, case window, call count, current prices,
+and hard USD cap. See `docs/gap-probe.md` for hypotheses and stopping rules.
 
 ## Add a suite
 

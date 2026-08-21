@@ -18,6 +18,26 @@ from call import Config as ChatConfig
 
 
 _PROMPT_REVISION = "longmem-direct-v1"
+_READER_PROMPTS = {
+  _PROMPT_REVISION: "",
+  "longmem-exact-v1": (
+    "\n\nKeep the step-by-step reasoning above. End with exactly one final line in the form "
+    "`FINAL ANSWER: <answer>`. Make that final answer as narrow as the question and include only the requested value(s)."
+  ),
+  "longmem-exact-abstain-v1": (
+    "\n\nKeep the step-by-step reasoning above. End with exactly one final line in the form "
+    "`FINAL ANSWER: <answer>`. Make that final answer as narrow as the question and include only the requested value(s). "
+    "If the history does not contain enough evidence, use `FINAL ANSWER: UNANSWERABLE`. Treat an assistant suggestion "
+    "as a user fact only when the history shows that the user adopted or confirmed it."
+  ),
+  "longmem-judge-then-solve-v1": (
+    "\n\nBefore solving, audit whether the history contains enough evidence and write exactly one line: "
+    "`ANSWERABILITY: ANSWERABLE` or `ANSWERABILITY: UNANSWERABLE`. If it is unanswerable, stop. Otherwise keep the "
+    "step-by-step reasoning above and end with exactly one final line in the form `FINAL ANSWER: <answer>`. Make that "
+    "final answer as narrow as the question and include only the requested value(s). Treat an assistant suggestion as a "
+    "user fact only when the history shows that the user adopted or confirmed it."
+  ),
+}
 _JUDGE_REVISION = f"longmem-official-{longmem._BENCHMARK_REVISION}"
 _CHAT_ENVELOPE_TOKENS = 256
 _TASKS = (
@@ -80,6 +100,12 @@ def _parser() -> argparse.ArgumentParser:
   read.add_argument("--receipt", type=Path)
   read.add_argument("--offset", type=int, default=0)
   read.add_argument("--limit", type=int, default=0)
+  read.add_argument(
+    "--reader-prompt",
+    choices=tuple(_READER_PROMPTS),
+    default=_PROMPT_REVISION,
+    help="Frozen reader prompt revision; defaults to the official LongMemEval prompt.",
+  )
   _chat_arguments(read, default_tokens=1_000)
 
   judge = commands.add_parser("judge", help="Apply the pinned official QA judge.")
@@ -104,17 +130,26 @@ def _chat_arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> 
 
 def _read(args: argparse.Namespace) -> None:
   config = _config(args)
+  prompt_revision = args.reader_prompt
   receipt_path = args.receipt or _receipt_path(args.out)
   pending_path = _pending_path(args.out)
   _distinct_paths(args.contexts, args.out, receipt_path, pending_path)
   contexts, contexts_sha256 = _contexts(args.contexts)
   contexts = _window(contexts, offset=args.offset, limit=args.limit)
   existing = _existing(args.out, kind="hypothesis")
-  expected = {context.question_id: _reader_id(context, config) for context in contexts}
+  expected = {
+    context.question_id: _reader_id(context, config, prompt_revision=prompt_revision)
+    for context in contexts
+  }
   _validate_existing(existing, expected, error="reader_resume_identity_mismatch")
   for context in contexts:
     if record := existing.get(context.question_id):
-      _validate_record_cost(record, prompt=_reader_prompt(context), config=config, error="hypothesis_resume_invalid")
+      _validate_record_cost(
+        record,
+        prompt=_reader_prompt(context, prompt_revision=prompt_revision),
+        config=config,
+        error="hypothesis_resume_invalid",
+      )
   _recover_pending(pending_path, records=existing)
 
   records = dict(existing)
@@ -122,7 +157,7 @@ def _read(args: argparse.Namespace) -> None:
   for context in contexts:
     if context.question_id in records:
       continue
-    prompt = _reader_prompt(context)
+    prompt = _reader_prompt(context, prompt_revision=prompt_revision)
     _check_cost(records.values(), prompt=prompt, config=config)
     if key is None:
       key = _key(args, config=config)
@@ -158,6 +193,7 @@ def _read(args: argparse.Namespace) -> None:
     config=config,
     records=ordered,
     output=args.out,
+    prompt_revision=prompt_revision,
   )
   _write(receipt_path, receipt)
   print(json.dumps({"out": str(args.out), "receipt": str(receipt_path), "summary": receipt["summary"]}, sort_keys=True))
@@ -232,7 +268,7 @@ def _judge(args: argparse.Namespace) -> None:
     config=config,
     records=ordered,
     output=args.out,
-    scores=_scores(ordered),
+    scores=_scores(ordered, population=references),
   )
   _write(receipt_path, receipt)
   print(json.dumps({"out": str(args.out), "receipt": str(receipt_path), "summary": receipt["summary"]}, sort_keys=True))
@@ -259,13 +295,17 @@ def _chat(prompt: str, *, config: ChatConfig, key: str) -> ChatResult:
     raise QAError(str(exc)) from exc
 
 
-def _reader_prompt(context: Context) -> str:
+def _reader_prompt(context: Context, *, prompt_revision: str = _PROMPT_REVISION) -> str:
+  try:
+    contract = _READER_PROMPTS[prompt_revision]
+  except KeyError as exc:
+    raise QAError("reader_prompt_revision_invalid") from exc
   return (
     "I will give you several history chats between you and a user. Please answer the question based on the relevant "
     "chat history. Answer the question step by step: first extract all the relevant information, and then reason over "
     "the information to get the answer.\n\n\n"
     f"History Chats:\n\n{context.context}\n\nCurrent Date: {context.question_date}\n"
-    f"Question: {context.question}\nAnswer (step by step):"
+    f"Question: {context.question}\nAnswer (step by step):{contract}"
   )
 
 
@@ -533,10 +573,17 @@ def _validate_record_cost(
     raise QAError(str(exc)) from exc
 
 
-def _reader_id(context: Context, config: ChatConfig) -> str:
+def _reader_id(
+  context: Context,
+  config: ChatConfig,
+  *,
+  prompt_revision: str = _PROMPT_REVISION,
+) -> str:
+  if prompt_revision not in _READER_PROMPTS:
+    raise QAError("reader_prompt_revision_invalid")
   return _digest(
     {
-      "prompt": _PROMPT_REVISION,
+      "prompt": prompt_revision,
       "context_run_id": context.run_id,
       "context_sha256": context.context_sha256,
       "question": context.question,
@@ -569,6 +616,7 @@ def _run_receipt(
   records: list[dict[str, Any]],
   output: Path,
   scores: dict[str, Any] | None = None,
+  prompt_revision: str | None = None,
 ) -> dict[str, Any]:
   semantic = {
     "schema": f"agos-memory-lab-{kind}-v4",
@@ -578,7 +626,7 @@ def _run_receipt(
       "request": _request_value(config),
       "execution": _execution_value(config),
     },
-    "prompt_revision": _PROMPT_REVISION if kind == "read" else _JUDGE_REVISION,
+    "prompt_revision": prompt_revision or (_PROMPT_REVISION if kind == "read" else _JUDGE_REVISION),
     "cases": [
       {
         "question_id": record["question_id"],
@@ -591,7 +639,10 @@ def _run_receipt(
   }
   if scores is not None:
     semantic["scores"] = scores
-  run_id = _digest(semantic)
+  identity = semantic
+  if scores is not None:
+    identity = {**semantic, "scores": _identity_scores(scores)}
+  run_id = _digest(identity)
   receipt = {
     **semantic,
     "run_id": run_id,
@@ -617,7 +668,11 @@ def _usage_summary(records: list[dict[str, Any]], *, config: ChatConfig) -> dict
   }
 
 
-def _scores(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _scores(
+  records: list[dict[str, Any]],
+  *,
+  population: tuple[Reference, ...] | None = None,
+) -> dict[str, Any]:
   by_type = {
     task: [record for record in records if record["question_type"] == task]
     for task in _TASKS
@@ -626,6 +681,7 @@ def _scores(records: list[dict[str, Any]]) -> dict[str, Any]:
   return {
     "accuracy": _accuracy(records),
     "task_accuracy": round(fmean(_accuracy(values) for values in populated.values()), 8) if populated else 0.0,
+    "benchmark_weighted_accuracy": _benchmark_weighted_accuracy(records, population=population),
     "abstention_accuracy": _accuracy([record for record in records if record["abstention"]]),
     "strict_parse_failures": sum(record["strict_label"] is None for record in records),
     "strict_parse_disagreements": sum(
@@ -637,6 +693,39 @@ def _scores(records: list[dict[str, Any]]) -> dict[str, Any]:
       for task, values in populated.items()
     },
   }
+
+
+def _benchmark_weighted_accuracy(
+  records: list[dict[str, Any]],
+  *,
+  population: tuple[Reference, ...] | None,
+) -> float | None:
+  if population is None:
+    return None
+  strata = {
+    (reference.question_type, reference.abstention)
+    for reference in population
+  }
+  samples = {
+    stratum: [
+      record
+      for record in records
+      if (record["question_type"], record["abstention"]) == stratum
+    ]
+    for stratum in strata
+  }
+  if any(not values for values in samples.values()):
+    return None
+  weights = {
+    stratum: sum((reference.question_type, reference.abstention) == stratum for reference in population)
+    for stratum in strata
+  }
+  total = len(population)
+  return round(sum(weights[stratum] * _accuracy(values) for stratum, values in samples.items()) / total, 8)
+
+
+def _identity_scores(scores: dict[str, Any]) -> dict[str, Any]:
+  return {key: value for key, value in scores.items() if key != "benchmark_weighted_accuracy"}
 
 
 def _accuracy(records: list[dict[str, Any]]) -> float:

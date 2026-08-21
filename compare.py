@@ -190,6 +190,7 @@ def _longmem(receipt: Receipt, *, source: str) -> Receipt:
     key: value[key]
     for key in expected - {"run_id", "measurements", "contexts", "receipt_sha256"}
   }
+  semantic["summary"] = _longmem_identity_summary(semantic["summary"])
   if _sha256(value["run_id"], error=f"{source}_run_identity_invalid") != _digest(semantic):
     raise CompareError(f"{source}_run_identity_mismatch")
   config = _object(value["config"], error=f"{source}_config_invalid")
@@ -227,6 +228,12 @@ def _qa(receipt: Receipt, *, kind: str) -> Receipt:
   if set(value) != expected or value.get("schema") != schema:
     raise CompareError(f"{kind}_receipt_shape_invalid")
   semantic = {key: value[key] for key in semantic_keys}
+  if kind == "judge":
+    semantic["scores"] = {
+      key: item
+      for key, item in semantic["scores"].items()
+      if key != "benchmark_weighted_accuracy"
+    }
   if _sha256(value["run_id"], error=f"{kind}_run_identity_invalid") != _digest(semantic):
     raise CompareError(f"{kind}_run_identity_mismatch")
   _case_ids(value, error=f"{kind}_cases_invalid")
@@ -503,20 +510,40 @@ def _longmem_summary(value: dict[str, Any], *, error: str) -> None:
   _metrics(summary["retrieval"], error=error)
   _metrics(summary["kernel"], error=error)
   selection = _object(summary["selection"], error=error)
-  if set(selection) != {
+  legacy_selection = {
     "truncated_cases",
     "mean_candidates",
     "mean_selected",
     "mean_content_chars",
     "outcomes",
-  }:
+  }
+  additive_selection = {"mean_selected_items", "mean_distinct_sessions"}
+  if set(selection) not in {frozenset(legacy_selection), frozenset(legacy_selection | additive_selection)}:
     raise CompareError(error)
   _count(selection["truncated_cases"], error=error)
-  for key in ("mean_candidates", "mean_selected", "mean_content_chars"):
+  for key in (
+    "mean_candidates",
+    "mean_selected",
+    "mean_content_chars",
+  ):
     _number(selection[key], error=error)
+  for key in additive_selection:
+    if key in selection:
+      _number(selection[key], error=error)
   outcomes = _object(selection["outcomes"], error=error)
   for count in outcomes.values():
     _count(count, error=error)
+
+
+def _longmem_identity_summary(value: Any) -> dict[str, Any]:
+  summary = _object(value, error="longmem_summary_invalid")
+  selection = _object(summary.get("selection"), error="longmem_summary_invalid")
+  legacy = {
+    key: item
+    for key, item in selection.items()
+    if key not in {"mean_selected_items", "mean_distinct_sessions"}
+  }
+  return {**summary, "selection": legacy}
 
 
 def _qa_summary(value: dict[str, Any], *, kind: str) -> None:

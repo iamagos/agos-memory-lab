@@ -53,6 +53,8 @@ def test_lexical_run_emits_a_verified_governed_receipt(tmp_path: Path) -> None:
   assert receipt["summary"]["cases"] == 3
   assert receipt["summary"]["eligible"] == 2
   assert receipt["summary"]["ignored_abstention"] == 1
+  assert receipt["summary"]["selection"]["mean_selected_items"] == 1.66666667
+  assert receipt["summary"]["selection"]["mean_distinct_sessions"] == 1.66666667
   assert receipt["cases"][0]["retrieved_session_ids"][0] == "answer-1"
   assert receipt["cases"][0]["retrieved_occurrence_ids"] == [
     "2:answer-1",
@@ -517,6 +519,31 @@ def test_candidate_limit_cannot_exceed_the_kernel_route_bound(tmp_path: Path) ->
 
   assert completed.returncode != 0
   assert completed.stderr.strip() == "candidate_limit_invalid"
+
+
+def test_full_turn_dense_indexing_is_explicit_and_dense_only(tmp_path: Path) -> None:
+  case = longmem._load(FIXTURE)[0]
+  default = longmem._session_entries(case)
+  full_turns = longmem._session_entries(case, full_turns=True)
+  completed = _run(
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--retriever",
+    "lexical",
+    "--dense-full-turns",
+    "--out",
+    str(tmp_path / "no.json"),
+    check=False,
+  )
+
+  assert "Congratulations." not in default[-1].text
+  assert "assistant: Congratulations." in full_turns[-1].text
+  assert completed.stderr.strip() == "dense_full_turns_requires_qdrant_sessions"
 
 
 def test_episode_candidates_require_a_memory_run_and_fit_the_selection_bound(
