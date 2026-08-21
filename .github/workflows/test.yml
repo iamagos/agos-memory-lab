@@ -2,6 +2,7 @@ name: Test
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -22,4 +23,3 @@ jobs:
       - run: uv run pytest
       - run: uv run ruff check .
       - run: uv run python smoke.py
-
