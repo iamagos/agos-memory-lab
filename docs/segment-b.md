@@ -204,6 +204,21 @@ Two consequences worth internalising before choosing a reader:
 Every call already carries `--max-cost`, which is the real-time guard. Azure
 budget alerts fire on actual spend and lag by hours; they are not a control.
 
+### Rate limit is a precondition, not a scheduling detail
+
+Dollars are not the only ceiling. A deployment's tokens-per-minute allowance has
+to exceed the **largest single call** in the chosen cells, not merely the average
+throughput, because a request whose estimated tokens exceed a whole minute's
+allowance is refused rather than queued. At B3 that single call is ~45,000 input
+tokens, and the full-history control's largest case is ~127,600.
+
+A low-TPM deployment therefore does not run the segment slowly; it does not run
+it at all, while a small judge-only call on the same deployment succeeds and
+makes the endpoint look healthy. Read the deployment's TPM and RPM before
+choosing a reader, and have the one live qualification call confirm that a
+representative reader-sized request is admitted — not just that the endpoint
+answers.
+
 ## Statistical power
 
 **This is the limitation that matters most, and it should appear in any writeup
