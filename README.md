@@ -283,6 +283,22 @@ A 1,024-token qualification then succeeded with returned model
 [Alibaba Model Studio](https://help.aliyun.com/zh/model-studio/base-url)
 documentation before a live qualification.
 
+If a prior process already observed a terminal error but left its pending marker,
+reconcile it with the exact original request flags. This path validates the
+pending request ID, writes a failure receipt, reads no credential, and makes no
+request:
+
+```bash
+uv run python qualify.py \
+  --out runs/QUALIFICATION.json \
+  --reconcile-error chat_output_limit_exceeded \
+  ORIGINAL_REQUEST_FLAGS
+```
+
+Reconciliation is not cancellation or guessing. Use it only for an enumerated
+error already observed by the process that created the marker. A configuration
+mismatch preserves the marker and fails closed.
+
 The judge copies the task-specific and abstention behavior from the pinned
 [official evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/evaluation/evaluate_qa.py),
 including its permissive knowledge-update rule: a response may mention stale

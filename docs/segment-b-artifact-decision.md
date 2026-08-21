@@ -135,7 +135,8 @@ stay out of default rendering until its budget cost is measured.
 
 ## Approval boundary
 
-No authenticated or paid call is authorized by this decision. The two pending
-DeepSeek qualification outcomes must be resolved before any retry. Any later
-DeepSeek reader or Azure judge run needs fresh approval bound to the exact
-endpoint, model, case window, request count, current prices, and hard USD cap.
+No authenticated or paid call is authorized by this decision. The two prior
+DeepSeek qualification failures have terminal, request-ID-matched receipts and
+their marker bytes remain archived; neither requires a retry. Any later DeepSeek
+reader or Azure judge run still needs fresh approval bound to the exact endpoint,
+model, case window, request count, current prices, and hard USD cap.

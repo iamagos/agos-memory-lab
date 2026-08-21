@@ -71,5 +71,80 @@ def test_unknown_qualification_outcome_blocks_another_call(tmp_path: Path) -> No
     qualify._qualify(args)
 
 
+def test_reconciliation_closes_one_matching_pending_request_without_a_call(
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  out = tmp_path / "qualification.json"
+  args = _args(
+    "--out",
+    str(out),
+    "--model",
+    "model",
+    "--reconcile-error",
+    "chat_output_limit_exceeded",
+  )
+  config = qualify.bounded.config(args)
+  pending = qualify._pending_path(out)
+  pending.write_text(
+    json.dumps(
+      {
+        "schema": qualify._PENDING_SCHEMA,
+        "request_id": qualify._request_id(config),
+        "prompt_sha256": qualify._text_digest(qualify._PROMPT),
+      },
+      sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+  )
+
+  def unexpected(*_: object, **__: object) -> object:
+    raise AssertionError("reconciliation_made_a_call")
+
+  monkeypatch.setattr(qualify.model, "structure", unexpected)
+  receipt = qualify._reconcile(args)
+
+  assert receipt["schema"] == qualify._FAILURE_SCHEMA
+  assert receipt["result"] == {
+    "status": "failed",
+    "error": "chat_output_limit_exceeded",
+    "usage": None,
+    "cost": {"estimated_usd": None, "reserved_usd": 0.0},
+  }
+  assert json.loads(out.read_text(encoding="utf-8")) == receipt
+  assert not pending.exists()
+
+
+def test_reconciliation_preserves_a_mismatched_pending_request(tmp_path: Path) -> None:
+  out = tmp_path / "qualification.json"
+  pending = qualify._pending_path(out)
+  pending.write_text(
+    json.dumps(
+      {
+        "schema": qualify._PENDING_SCHEMA,
+        "request_id": "different-request",
+        "prompt_sha256": qualify._text_digest(qualify._PROMPT),
+      }
+    )
+    + "\n",
+    encoding="utf-8",
+  )
+  args = _args(
+    "--out",
+    str(out),
+    "--model",
+    "model",
+    "--reconcile-error",
+    "chat_http_400",
+  )
+
+  with pytest.raises(qualify.QualificationError, match="^qualification_pending_request_mismatch$"):
+    qualify._reconcile(args)
+
+  assert pending.exists()
+  assert not out.exists()
+
+
 def _args(*values: str):
   return qualify._parser().parse_args(values)

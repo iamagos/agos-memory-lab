@@ -227,21 +227,28 @@ Measured in this repository on 2026-08-21:
 - One approved DeepSeek request targeted
   `https://api.deepseek.com/beta/chat/completions`, requested
   `deepseek-v4-flash`, allowed 64 output tokens, and had a `$0.001` hard cap.
-  It returned HTTP 400 and left pending request ID
+  It returned HTTP 400 with request ID
   `787d7994c8cce26d72ccd1ff91c99db8d370667e0f5017d5e79aec23116d80d0`;
   no served-model identity, usage, cost, or strict-schema success was measured.
   Local request inspection shows the generic profile forces
   `tool_choice=required`; current DeepSeek V4 compatibility guidance says that
   forcing is unsupported in thinking mode. That is the leading explanation,
   not a measured server error body. The explicit DeepSeek provider profile now
-  changes the field to `auto`, with regression coverage.
+  changes the field to `auto`, with regression coverage. The saved marker was
+  reconciled without a call into terminal failure receipt identity
+  `ed899b8991bee4b5f534ab78bf273440c1b2c49b968b8b492c94aa3825219480`.
 - One approved retry used that DeepSeek profile with the same endpoint, model,
   64-token limit, and `$0.001` cap. It passed HTTP request validation but ended
-  as `chat_output_limit_exceeded`, leaving pending request ID
+  as `chat_output_limit_exceeded` with request ID
   `79f6bace6f2599e99d58b7f3a721b6bfc9998a0cffefb28575fc2709b2d0d90d`.
   It produced no success receipt or usage measurement. This is evidence that
   64 output tokens are insufficient for the default thinking path, not evidence
-  that strict structured output succeeds.
+  that strict structured output succeeds. Its saved marker was reconciled
+  without a call into terminal failure receipt identity
+  `97e8a9bf7d948bd27870aae2c02ea1942577979c0a23623265ae2bee0a5fa2c5`.
+- Both original pending markers remain archived as opaque bytes under
+  `runs/reconciled-pending/`, with SHA-256 values `07514c20…27b22` and
+  `0977c4cb…8e12`. No unresolved DeepSeek qualification marker remains.
 - One approved 1,024-token qualification then succeeded. Request ID
   `7186b5aa7ceffc5f54ce3082a7e640f6a6d3a99ac2fc4f47812654313203d63e`
   returned model `deepseek-v4-flash`, validated the strict nonce schema, used
