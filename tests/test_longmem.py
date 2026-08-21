@@ -546,6 +546,78 @@ def test_full_turn_dense_indexing_is_explicit_and_dense_only(tmp_path: Path) -> 
   assert completed.stderr.strip() == "dense_full_turns_requires_qdrant_sessions"
 
 
+def test_role_preserving_chunks_are_bounded_and_keep_session_identity(tmp_path: Path) -> None:
+  turn = longmem.Turn(
+    role="assistant",
+    content="alpha beta gamma delta",
+  )
+  chunks = longmem._turn_chunks(turn, max_chars=18)
+  out = tmp_path / "chunks.json"
+  contexts = tmp_path / "chunk-contexts.jsonl"
+
+  _run(
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--source",
+    "chunks",
+    "--chunk-chars",
+    "48",
+    "--retriever",
+    "lexical",
+    "--candidates",
+    "20",
+    "--top-k",
+    "3",
+    "--chars",
+    "300",
+    "--out",
+    str(out),
+    "--contexts",
+    str(contexts),
+  )
+
+  receipt = json.loads(out.read_text())
+  context = json.loads(contexts.read_text().splitlines()[0])
+  degree = receipt["cases"][0]
+
+  assert all(len(chunk) <= 18 for chunk in chunks)
+  assert " ".join(chunk.removeprefix("assistant: ") for chunk in chunks) == turn.content
+  assert receipt["config"]["source"] == "chunks"
+  assert receipt["config"]["chunk_chars"] == 48
+  assert receipt["config"]["retriever_identity"]["text"] == "role-preserving chunks"
+  assert degree["selected_session_ids"][0] == "answer-1"
+  assert all("#turn=" in chunk_id for chunk_id in degree["selected_chunk_ids"])
+  assert context["selected_chunk_ids"] == degree["selected_chunk_ids"]
+  assert "user: I graduated with a degree" in context["context"]
+
+
+def test_chunk_size_is_explicit_and_chunk_only(tmp_path: Path) -> None:
+  base = (
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--out",
+    str(tmp_path / "no.json"),
+  )
+
+  missing = _run(*base, "--source", "chunks", check=False)
+  unrelated = _run(*base, "--chunk-chars", "100", check=False)
+  too_small = _run(*base, "--source", "chunks", "--chunk-chars", "11", check=False)
+
+  assert missing.stderr.strip() == "chunk_chars_required"
+  assert unrelated.stderr.strip() == "chunk_chars_requires_chunks"
+  assert too_small.stderr.strip() == "chunk_chars_invalid"
+
+
 def test_episode_candidates_require_a_memory_run_and_fit_the_selection_bound(
   tmp_path: Path,
 ) -> None:

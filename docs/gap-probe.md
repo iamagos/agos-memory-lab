@@ -219,6 +219,11 @@ Measured in this repository on 2026-08-21:
   raw sessions retained 1/6. At 24,000 characters, memories stayed at 3/6 while
   raw sessions reached 4/6 and semantically supported all six. This supports a
   bounded verbatim-evidence experiment, not replacement of memory compression.
+- Bounded role-preserving chunks did not beat memories at the operating point.
+  The best 300-character chunk lane tied memory coverage at 3/6 literal and 4/6
+  semantically supported cases; 600- and 1,200-character chunks fell to 2/6
+  literal. Chunk `recall_all@10` was 1.0, demonstrating that session-level
+  recall is insufficient when the selected sub-session span omits the operand.
 - One approved DeepSeek request targeted
   `https://api.deepseek.com/beta/chat/completions`, requested
   `deepseek-v4-flash`, allowed 64 output tokens, and had a `$0.001` hard cap.

@@ -309,6 +309,26 @@ uv run python probe.py answerability \
   --out runs/longmem-s-answerability.json
 ```
 
+The zero-call verbatim control retrieves bounded, role-prefixed source chunks
+while retaining the original session identity for recall:
+
+```bash
+uv run python longmem.py run \
+  --file runs/inputs/CUSTOM.json \
+  --sha256 DATASET_SHA256 \
+  --revision DATASET_REVISION \
+  --source chunks \
+  --chunk-chars 300 \
+  --retriever lexical \
+  --candidates 100 \
+  --top-k 100 \
+  --chars 2400 \
+  --contexts runs/chunks-300-2400-contexts.jsonl
+```
+
+`--chunk-chars` is required for `--source chunks` and rejected for other
+sources. Existing session and memory lanes are unchanged.
+
 The three reader/judge endpoint profiles are below. Values in capitals are
 deployment facts that must be resolved without changing the fixed flags around
 them. A custom endpoint always has a non-default `--provider-id` and an explicit

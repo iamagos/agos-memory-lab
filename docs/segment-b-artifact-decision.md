@@ -109,6 +109,25 @@ new core field:
 4. Run a local R0 reader only if the verbatim lane improves coverage without
    collapsing the 2,400-character budget.
 
+### Gate outcome — 2026-08-21
+
+The chunk sweep tested 300, 600, and 1,200 role-prefixed source characters at
+2,400- and 24,000-character context budgets. The 300-character lane was best at
+the operating point: 3/6 literal operands and 4/6 semantically supported cases.
+That ties the memory lane rather than improving it. Chunks preserve the `$10`
+train and `$60` taxi operands for `09ba9854`, but lose the complete old/new
+ratio transition for `6071bd76`; the memory lane does the reverse. The 600- and
+1,200-character lanes fall to 2/6 literal operands at 2,400 characters.
+
+Chunk retrieval reports `recall_all@10 = 1.0`, but that means at least one
+chunk from every gold session survived. It does not prove that the answer-bearing
+chunk survived, which is precisely why operand coverage remains the gate.
+
+The verbatim lane therefore does not license a local or paid reader call and
+does not license an artifact schema change. Preserve it as a reproducible
+negative control; resume representation work only with new coverage or a
+different retrieval hypothesis.
+
 Only if that experiment wins should a separate schema proposal specify an exact
 source span or quote carried by each memory. Such evidence must be validated as
 an exact substring of the bound source, remain optional during migration, and
