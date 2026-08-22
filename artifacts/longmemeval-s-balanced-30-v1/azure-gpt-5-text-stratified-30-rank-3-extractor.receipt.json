@@ -1,0 +1,130 @@
+{
+  "benchmark_revision": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+  "config": {
+    "execution": {
+      "concurrency": 1,
+      "input_cost_per_million": 1.25,
+      "max_cost_usd": 51.0,
+      "output_cost_per_million": 10.0,
+      "retries": 0,
+      "timeout": 120.0
+    },
+    "request": {
+      "adapter": {
+        "api": "chat-completions",
+        "openai": "3.3.0",
+        "pydantic_ai": "2.21.0"
+      },
+      "api_version": null,
+      "base_url": "https://agos-memory-evals-openai.openai.azure.com/openai/v1",
+      "max_tokens": 2000,
+      "max_tokens_field": "max_completion_tokens",
+      "model": "gpt-5",
+      "provider": "azure",
+      "provider_id": "azure-openai",
+      "reasoning_effort": "minimal",
+      "temperature": null
+    }
+  },
+  "output": {
+    "file": "azure-gpt5-frozen30-extractor.jsonl",
+    "sha256": "995a757c3999a1b47136b29991443106eafece48c48e88a909d5a1a5a2a2ed0c"
+  },
+  "output_schema_sha256": "4568c6b716cecad531646bdd35586fe6384c87d7850307b30edde9bb815aae13",
+  "prompt_revision": "longmem-additive-v3",
+  "prompt_sha256": "5851096a6d8ce493b1327ab71930600d4598a56750d3e08926392029143c60f8",
+  "receipt_sha256": "5cbd7dc484b1be25db3bc561c365dcf52a7a83772c3f5b3c994324aa10506a66",
+  "results_sha256": "7c5c95b84d6cc8c7221af613c5bb48e4ce5fb36a9a149560350c99c92daf4ee4",
+  "run_id": "c14d7d3065cdc037fce3ce32c054c5b87dfa1aba6ba8c560994a5857f25e1cdf",
+  "schema": "agos-memory-lab-extraction-v2",
+  "selection": {
+    "manifest": {
+      "abstention_by_type": {
+        "knowledge-update": 1,
+        "multi-session": 1,
+        "single-session-assistant": 0,
+        "single-session-preference": 0,
+        "single-session-user": 1,
+        "temporal-reasoning": 1
+      },
+      "cases": 30,
+      "cases_per_type": 5,
+      "file": "longmemeval-s-balanced-30-v1.json",
+      "method": "sha256-ranked-stratified-v1",
+      "question_types": {
+        "knowledge-update": 5,
+        "multi-session": 5,
+        "single-session-assistant": 5,
+        "single-session-preference": 5,
+        "single-session-user": 5,
+        "temporal-reasoning": 5
+      },
+      "revision": "segment-a-balanced-30-v1",
+      "schema": "agos-memory-lab-case-manifest-v1",
+      "seed": "agos-segment-a-v1",
+      "sha256": "3806648c2bb691a59bec7df30cc611dcbea34aefdc7e9841b433a4a0ec103a14"
+    },
+    "mode": "manifest"
+  },
+  "source": {
+    "file": "longmemeval_s_cleaned.json",
+    "repository": "xiaowu0162/longmemeval-cleaned",
+    "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "size": 277383467
+  },
+  "state": {
+    "file": "azure-gpt5-frozen30-extractor.jsonl.state.jsonl",
+    "sha256": "affb810398b6cc335985b33f476c9befa2caa6608e133c61bbf3ce64bd3e1617"
+  },
+  "summary": {
+    "empty_sources": 7,
+    "estimated_cost_usd": 11.48754625,
+    "input_tokens": 3605877,
+    "latency_seconds": 9635.944555,
+    "output_tokens": 698020,
+    "proposals": 17201,
+    "reserved_cost_usd": 50.16650125,
+    "sources": 1436,
+    "usage_missing": 0
+  },
+  "window": {
+    "availability": "released",
+    "cases": [
+      "dccbc061",
+      "001be529",
+      "1faac195",
+      "faba32e5",
+      "29f2956b_abs",
+      "gpt4_7fce9456",
+      "a9f6b44c",
+      "0edc2aef",
+      "54026fce",
+      "95228167",
+      "a89d7624",
+      "1c0ddc50",
+      "77eafa52",
+      "1c549ce4",
+      "e5ba910e_abs",
+      "gpt4_e414231e",
+      "gpt4_7bc6cf22",
+      "4dfccbf8",
+      "2a1811e2",
+      "gpt4_c27434e8_abs",
+      "6aeb4375",
+      "9ea5eabc",
+      "a1eacc2a",
+      "6071bd76",
+      "6aeb4375_abs",
+      "6ae235be",
+      "7e00a6cb",
+      "71a3fd6b",
+      "70b3e69b",
+      "3e321797"
+    ],
+    "future_sources_omitted": 0,
+    "offset": 0,
+    "source_sha256": "4faa69b184a5667b1b1dfc2afd9cf2b4a3a6c3f40d9d1afc7cd011a82dc1d67d",
+    "sources": 1436
+  }
+}

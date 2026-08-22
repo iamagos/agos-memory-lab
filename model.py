@@ -12,12 +12,15 @@ from openai import APIConnectionError, APIResponseValidationError, APIStatusErro
 from pydantic_ai import Agent, UnexpectedModelBehavior, UsageLimits
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.azure import AzureProvider
+from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 
-Provider = Literal["openai", "azure"]
+Provider = Literal["openai", "azure", "deepseek"]
 Reasoning = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+TokenLimitField = Literal["max_completion_tokens", "max_tokens"]
 OutputT = TypeVar("OutputT")
 API = "chat-completions"
 OPENAI_VERSION = version("openai")
@@ -37,10 +40,11 @@ class ModelConfig:
   temperature: float | None
   reasoning_effort: Reasoning | None
   max_tokens: int
+  max_tokens_field: TokenLimitField
   timeout: float
 
   def __post_init__(self) -> None:
-    if not isinstance(self.provider, str) or self.provider not in {"openai", "azure"}:
+    if not isinstance(self.provider, str) or self.provider not in {"openai", "azure", "deepseek"}:
       raise ModelError("chat_provider_invalid")
     if (
       not isinstance(self.base_url, str)
@@ -67,7 +71,7 @@ class ModelConfig:
     api_version = self.api_version.strip() if isinstance(self.api_version, str) else None
     if api_version == "" or (api_version is not None and _unsafe(api_version)):
       raise ModelError("chat_api_version_invalid")
-    if self.provider == "openai" and api_version is not None:
+    if self.provider in {"openai", "deepseek"} and api_version is not None:
       raise ModelError("chat_api_version_unexpected")
     if self.provider == "azure":
       if _v1_url(base_url) is not None and api_version is not None:
@@ -87,6 +91,8 @@ class ModelConfig:
       raise ModelError("chat_reasoning_effort_invalid")
     if not isinstance(self.max_tokens, int) or isinstance(self.max_tokens, bool) or self.max_tokens < 1:
       raise ModelError("chat_token_limit_invalid")
+    if self.max_tokens_field not in {"max_completion_tokens", "max_tokens"}:
+      raise ModelError("chat_token_limit_field_invalid")
     if not _number(self.timeout) or not math.isfinite(self.timeout) or self.timeout <= 0:
       raise ModelError("chat_timeout_invalid")
     object.__setattr__(self, "base_url", base_url)
@@ -162,7 +168,12 @@ async def _run(
 ) -> ModelResult[Any]:
   async with _http(config) as http_client:
     provider = _provider(config, api_key=api_key, http_client=http_client)
-    chat = OpenAIChatModel(config.model, provider=provider)
+    profile = (
+      OpenAIModelProfile(openai_chat_supports_max_completion_tokens=False)
+      if config.max_tokens_field == "max_tokens"
+      else None
+    )
+    chat = OpenAIChatModel(config.model, provider=provider, profile=profile)
     agent = Agent(chat, output_type=output_type, retries=0)
     result = await agent.run(
       prompt,
@@ -211,15 +222,19 @@ def _http(config: ModelConfig) -> httpx.AsyncClient:
 
 def _provider(
   config: ModelConfig, *, api_key: str, http_client: httpx.AsyncClient
-) -> OpenAIProvider | AzureProvider:
-  if config.provider == "openai":
+) -> OpenAIProvider | AzureProvider | DeepSeekProvider:
+  if config.provider != "azure":
     client = AsyncOpenAI(
       base_url=config.base_url,
       api_key=api_key,
       http_client=http_client,
       max_retries=0,
     )
-    return OpenAIProvider(openai_client=client)
+    return (
+      DeepSeekProvider(openai_client=client)
+      if config.provider == "deepseek"
+      else OpenAIProvider(openai_client=client)
+    )
   provider = AzureProvider(
     azure_endpoint=config.base_url,
     api_version=config.api_version,

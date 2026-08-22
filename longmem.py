@@ -42,6 +42,8 @@ from agos_memory.types import (
 )
 from rank_bm25 import BM25Okapi
 
+import case_manifest
+
 if TYPE_CHECKING:
   import memory
 
@@ -66,7 +68,13 @@ _CUTS = (1, 3, 5, 10, 50)
 _DEFAULT_DENSE_BATCH = 32
 _MAX_DENSE_BATCH = 256
 _Retriever = Literal["none", "recent", "full", "lexical", "oracle", "qdrant-dense", "qdrant-hybrid"]
-_Source = Literal["sessions", "memories"]
+_Source = Literal["sessions", "chunks", "memories"]
+
+
+@dataclass(frozen=True, slots=True)
+class Turn:
+  role: str
+  content: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +85,7 @@ class Session:
   at: datetime
   text: str
   content: str
+  turns: tuple[Turn, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +117,8 @@ class Entry:
   benchmark_id: str
   text: str
   at: datetime
+  content: str = ""
+  revision: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +160,13 @@ def _parser() -> argparse.ArgumentParser:
   run.add_argument("--sha256", help="Required SHA-256 for --file.")
   run.add_argument("--revision", help="Required immutable identity for --file.")
   run.add_argument("--data", type=Path, default=Path("data"))
+  run.add_argument("--manifest", type=Path, help="Frozen case manifest applied before offset and limit.")
   run.add_argument("--source", choices=_Source.__args__, default="sessions")
+  run.add_argument(
+    "--chunk-chars",
+    type=int,
+    help="Maximum role-prefixed source characters per chunk; required for chunks.",
+  )
   run.add_argument("--artifact", type=Path, help="Required source-linked artifact for memories.")
   run.add_argument("--artifact-sha256", help="Required artifact SHA-256 for memories.")
   run.add_argument("--retriever", choices=_Retriever.__args__, default="lexical")
@@ -170,6 +187,11 @@ def _parser() -> argparse.ArgumentParser:
     "--dense-batch",
     type=int,
     help=f"Qdrant index batch size; 1-{_MAX_DENSE_BATCH}, defaults to {_DEFAULT_DENSE_BATCH}.",
+  )
+  run.add_argument(
+    "--dense-full-turns",
+    action="store_true",
+    help="Embed user and assistant turns for dense session retrieval; the default embeds user turns only.",
   )
   run.add_argument("--cache", type=Path, default=Path("data/models"))
   run.add_argument("--out", type=Path)
@@ -217,17 +239,22 @@ def _run(args: argparse.Namespace) -> None:
   _verify_file(source["path"], sha256=source["sha256"], size=source["size"])
   all_cases = _load(source["path"])
   artifact, memories_by_case = _load_memories(args, source=source, cases=all_cases)
-  cases = all_cases[args.offset : None if args.limit == 0 else args.offset + args.limit]
-  if not cases:
-    raise LongMemError("dataset_selection_empty")
+  cases, selection = _select_cases(all_cases, args=args, source=source)
   entries_by_case = {
     case.question_id: (
-      _session_entries(case)
-      if artifact is None
-      else _memory_entries(memories_by_case.get(case.question_id, ()))
+      _memory_entries(memories_by_case.get(case.question_id, ()))
+      if artifact is not None
+      else _chunk_entries(case, max_chars=args.chunk_chars)
+      if args.source == "chunks"
+      else _session_entries(case)
     )
     for case in cases
   }
+  dense_entries_by_case = (
+    {case.question_id: _session_entries(case, full_turns=True) for case in cases}
+    if args.dense_full_turns
+    else entries_by_case
+  )
   episode_entries_by_case = (
     {
       case.question_id: _episode_entries(
@@ -249,11 +276,19 @@ def _run(args: argparse.Namespace) -> None:
     indexed = time.perf_counter()
     qdrant = _Qdrant(
       cases,
-      entries_by_case,
+      dense_entries_by_case,
       hybrid=args.retriever == "qdrant-hybrid",
       model=args.model,
       cache=args.cache,
-      text="user turns" if artifact is None else "memory text",
+      text=(
+        "memory text"
+        if artifact is not None
+        else "role-preserving chunks"
+        if args.source == "chunks"
+        else "full turns"
+        if args.dense_full_turns
+        else "user turns"
+      ),
       batch_size=dense_batch,
     )
     if args.episodes:
@@ -280,7 +315,13 @@ def _run(args: argparse.Namespace) -> None:
     if qdrant is not None
     else _retriever_identity(
       args.retriever,
-      text="user turns" if artifact is None else "memory text",
+      text=(
+        "memory text"
+        if artifact is not None
+        else "role-preserving chunks"
+        if args.source == "chunks"
+        else "user turns"
+      ),
     )
   )
   retriever_identity = (
@@ -337,6 +378,7 @@ def _run(args: argparse.Namespace) -> None:
         kernel = _govern(
           case,
           hits,
+          entries=entries,
           retriever=args.retriever,
           top_k=args.top_k,
           chars=args.chars,
@@ -358,18 +400,28 @@ def _run(args: argparse.Namespace) -> None:
       kernel_seconds += time.perf_counter() - governed
       raw_ids = tuple(hit.source_id for hit in hits)
       if artifact is None:
-        raw_benchmark_ids = tuple(_benchmark_id(case, source_id) for source_id in raw_ids)
+        by_id = {entry.source_id: entry for entry in entries}
+        raw_benchmark_ids = tuple(by_id[source_id].benchmark_id for source_id in raw_ids)
         selected_ids = kernel["selected_occurrence_ids"]
-        selected_benchmark_ids = tuple(
-          _benchmark_id(case, source_id) for source_id in selected_ids
-        )
-        context_ids = {"selected_occurrence_ids": selected_ids}
-        result_ids = {
-          "retrieved_occurrence_ids": raw_ids,
-          "retrieved_session_ids": raw_benchmark_ids,
-          "selected_occurrence_ids": selected_ids,
-          "selected_session_ids": selected_benchmark_ids,
-        }
+        selected_benchmark_ids = tuple(by_id[source_id].benchmark_id for source_id in selected_ids)
+        if args.source == "chunks":
+          raw_benchmark_ids = _unique(raw_benchmark_ids)
+          selected_benchmark_ids = _unique(selected_benchmark_ids)
+          context_ids = {"selected_chunk_ids": selected_ids}
+          result_ids = {
+            "retrieved_chunk_ids": raw_ids,
+            "retrieved_session_ids": raw_benchmark_ids,
+            "selected_chunk_ids": selected_ids,
+            "selected_session_ids": selected_benchmark_ids,
+          }
+        else:
+          context_ids = {"selected_occurrence_ids": selected_ids}
+          result_ids = {
+            "retrieved_occurrence_ids": raw_ids,
+            "retrieved_session_ids": raw_benchmark_ids,
+            "selected_occurrence_ids": selected_ids,
+            "selected_session_ids": selected_benchmark_ids,
+          }
       else:
         by_id = {
           value.record.record_id: value
@@ -458,10 +510,17 @@ def _run(args: argparse.Namespace) -> None:
     "lexical_weight": args.lexical_weight,
     "retriever_identity": retriever_identity,
   }
+  if selection is not None:
+    config = {**config, "selection": selection}
   if artifact is not None:
     config = {**config, "source": "memories", "artifact": artifact.identity}
+  elif args.source == "chunks":
+    config = {**config, "source": "chunks", "chunk_chars": args.chunk_chars}
   if args.episodes:
     config = {**config, "episodes": args.episodes}
+  if args.dense_full_turns:
+    config = {**config, "dense_full_turns": True}
+  summary = _summary(results)
   semantic = {
     "schema": "agos-memory-lab-longmem-v1",
     "benchmark": {
@@ -477,10 +536,10 @@ def _run(args: argparse.Namespace) -> None:
     },
     "kernel": version("agos-memory"),
     "config": config,
-    "summary": _summary(results),
+    "summary": summary,
     "cases": results,
   }
-  run_id = _digest(semantic)
+  run_id = _digest({**semantic, "summary": _identity_summary(summary)})
   context_output = None
   if args.contexts is not None:
     context_output = {
@@ -549,7 +608,7 @@ def _load_memories(
 ) -> tuple[memory.Artifact | None, dict[str, tuple[Memory, ...]]]:
   import memory
 
-  if args.source == "sessions":
+  if args.source != "memories":
     return None, {}
   try:
     artifact = memory.load(args.artifact, sha256=args.artifact_sha256)
@@ -600,16 +659,54 @@ def _load_memories(
   }
 
 
-def _session_entries(case: Case) -> tuple[Entry, ...]:
+def _session_entries(case: Case, *, full_turns: bool = False) -> tuple[Entry, ...]:
   return tuple(
     Entry(
       source_id=session.source_id,
       benchmark_id=session.benchmark_id,
-      text=session.text,
+      text=session.content if full_turns else session.text,
       at=session.at,
+      content=session.content,
+      revision=session.date,
     )
     for session in case.sessions
   )
+
+
+def _chunk_entries(case: Case, *, max_chars: int) -> tuple[Entry, ...]:
+  return tuple(
+    Entry(
+      source_id=f"{session.source_id}#turn={turn_index},chunk={chunk_index}",
+      benchmark_id=session.benchmark_id,
+      text=content,
+      at=session.at,
+      content=content,
+      revision=session.date,
+    )
+    for session in case.sessions
+    for turn_index, turn in enumerate(session.turns)
+    for chunk_index, content in enumerate(_turn_chunks(turn, max_chars=max_chars))
+  )
+
+
+def _turn_chunks(turn: Turn, *, max_chars: int) -> tuple[str, ...]:
+  prefix = f"{turn.role}: "
+  width = max_chars - len(prefix)
+  chunks = []
+  start = 0
+  while start < len(turn.content):
+    end = min(start + width, len(turn.content))
+    if end < len(turn.content):
+      boundary = turn.content.rfind(" ", start, end + 1)
+      if boundary > start:
+        end = boundary
+    value = turn.content[start:end].strip()
+    if value:
+      chunks.append(f"{prefix}{value}")
+    start = end
+    while start < len(turn.content) and turn.content[start].isspace():
+      start += 1
+  return tuple(chunks)
 
 
 def _episode_entries(case: Case, *, availability: str) -> tuple[Entry, ...]:
@@ -717,15 +814,17 @@ def _govern(
   case: Case,
   hits: tuple[Hit, ...],
   *,
+  entries: tuple[Entry, ...] | None = None,
   retriever: _Retriever,
   top_k: int,
   chars: int,
   lexical_weight: int,
 ) -> dict[str, Any]:
-  by_id = {session.source_id: session for session in case.sessions}
+  entries = entries or _session_entries(case)
+  by_id = {entry.source_id: entry for entry in entries}
   if any(hit.source_id not in by_id for hit in hits):
     raise LongMemError("retrieval_result_scope_mismatch")
-  items = tuple(_session_item(by_id[hit.source_id], paths=hit.paths) for hit in hits)
+  items = tuple(_entry_item(by_id[hit.source_id], paths=hit.paths) for hit in hits)
   routes = tuple(
     SelectionRoute(
       source="session",
@@ -776,20 +875,38 @@ def _session_item(
   *,
   paths: tuple[SelectionPath, ...] = (),
 ) -> SelectionItem:
+  return _entry_item(
+    Entry(
+      source_id=session.source_id,
+      benchmark_id=session.benchmark_id,
+      text=session.text,
+      at=session.at,
+      content=session.content,
+      revision=session.date,
+    ),
+    paths=paths,
+  )
+
+
+def _entry_item(
+  entry: Entry,
+  *,
+  paths: tuple[SelectionPath, ...] = (),
+) -> SelectionItem:
   return SelectionItem(
     source="session",
-    source_id=session.source_id,
+    source_id=entry.source_id,
     partition="history",
     kind="session",
-    text=session.text,
+    text=entry.text,
     content=(
-      f"Session Date: {session.date}\nSession Content:\n{session.content}"
-      if session.content
+      f"Session Date: {entry.revision}\nSession Content:\n{entry.content}"
+      if entry.content
       else ""
     ),
-    updated_at=session.at,
-    revision=session.date,
-    source_digest=source_digest(session.content),
+    updated_at=entry.at,
+    revision=entry.revision,
+    source_digest=source_digest(entry.content),
     paths=paths,
   )
 
@@ -1069,9 +1186,31 @@ def _selection_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     "truncated_cases": sum(result["kernel"]["truncated"] for result in results),
     "mean_candidates": round(fmean(result["kernel"]["source_count"] for result in results), 8),
     "mean_selected": round(fmean(result["kernel"]["included_count"] for result in results), 8),
+    "mean_selected_items": round(fmean(_selected_item_count(result) for result in results), 8),
+    "mean_distinct_sessions": round(
+      fmean(len(set(result["selected_session_ids"])) for result in results),
+      8,
+    ),
     "mean_content_chars": round(fmean(result["kernel"]["content_chars"] for result in results), 8),
     "outcomes": dict(sorted(reasons.items())),
   }
+
+
+def _selected_item_count(result: dict[str, Any]) -> int:
+  selected = result.get(
+    "selected_memory_ids",
+    result.get("selected_chunk_ids", result.get("selected_occurrence_ids", ())),
+  )
+  return len(selected) + len(result.get("selected_episode_occurrence_ids", ()))
+
+
+def _identity_summary(summary: dict[str, Any]) -> dict[str, Any]:
+  selection = {
+    key: value
+    for key, value in summary["selection"].items()
+    if key not in {"mean_selected_items", "mean_distinct_sessions"}
+  }
+  return {**summary, "selection": selection}
 
 
 class _Qdrant:
@@ -1110,7 +1249,14 @@ class _Qdrant:
       "dense": _model_identity(self.embedder),
       "index_batch_size": batch_size,
       "fusion": (
-        {"algorithm": "rrf", "k": 60, "lexical": _retriever_identity("lexical", text=text)}
+        {
+          "algorithm": "rrf",
+          "k": 60,
+          "lexical": _retriever_identity(
+            "lexical",
+            text="user turns" if text == "full turns" else text,
+          ),
+        }
         if hybrid
         else None
       ),
@@ -1194,7 +1340,7 @@ class _Qdrant:
 
 def _load(path: Path) -> tuple[Case, ...]:
   try:
-    with path.open() as source:
+    with path.open(encoding="utf-8") as source:
       values = json.load(source)
   except (OSError, json.JSONDecodeError) as exc:
     raise LongMemError(f"dataset_read_failed:{exc}") from exc
@@ -1205,6 +1351,33 @@ def _load(path: Path) -> tuple[Case, ...]:
   if len(ids) != len(set(ids)):
     raise LongMemError("dataset_question_identity_duplicated")
   return cases
+
+
+def _select_cases(
+  cases: tuple[Case, ...],
+  *,
+  args: argparse.Namespace,
+  source: dict[str, Any],
+) -> tuple[tuple[Case, ...], dict[str, Any] | None]:
+  if args.offset < 0 or args.limit < 0:
+    raise LongMemError("dataset_window_invalid")
+  identity = None
+  manifest_path = getattr(args, "manifest", None)
+  if manifest_path is not None:
+    try:
+      cases, manifest = case_manifest.select(
+        manifest_path,
+        cases,
+        benchmark={"repository": _BENCHMARK_REPOSITORY, "revision": _BENCHMARK_REVISION},
+        dataset=source,
+      )
+    except case_manifest.ManifestError as exc:
+      raise LongMemError(str(exc)) from exc
+    identity = {"mode": "manifest", "manifest": manifest}
+  selected = cases[args.offset : None if args.limit == 0 else args.offset + args.limit]
+  if not selected:
+    raise LongMemError("dataset_selection_empty")
+  return selected, identity
 
 
 def _case(value: Any) -> Case:
@@ -1238,7 +1411,7 @@ def _case(value: Any) -> Case:
 
 
 def _session(*, index: int, benchmark_id: str, date: str, turns: Any) -> Session:
-  text, content = _session_text(turns)
+  text, content, parsed = _session_text(turns)
   return Session(
     source_id=f"{index}:{benchmark_id}",
     benchmark_id=benchmark_id,
@@ -1246,14 +1419,16 @@ def _session(*, index: int, benchmark_id: str, date: str, turns: Any) -> Session
     at=_date(date),
     text=text,
     content=content,
+    turns=parsed,
   )
 
 
-def _session_text(value: Any) -> tuple[str, str]:
+def _session_text(value: Any) -> tuple[str, str, tuple[Turn, ...]]:
   if not isinstance(value, list):
     raise LongMemError("dataset_session_invalid")
   user: list[str] = []
   dialogue: list[str] = []
+  turns: list[Turn] = []
   for turn in value:
     if not isinstance(turn, dict) or turn.get("role") not in {"user", "assistant"}:
       raise LongMemError("dataset_turn_invalid")
@@ -1261,9 +1436,10 @@ def _session_text(value: Any) -> tuple[str, str]:
     if not isinstance(content, str):
       raise LongMemError("dataset_turn_content_invalid")
     dialogue.append(f"{turn['role']}: {content}")
+    turns.append(Turn(role=turn["role"], content=content))
     if turn["role"] == "user":
       user.append(content)
-  return " ".join(user), "\n".join(dialogue)
+  return " ".join(user), "\n".join(dialogue), tuple(turns)
 
 
 def _date(value: str) -> datetime:
@@ -1299,6 +1475,8 @@ def _verify_file(path: Path, *, sha256: str, size: int) -> None:
 
 
 def _validate_run(args: argparse.Namespace) -> None:
+  if args.dense_full_turns and (not args.retriever.startswith("qdrant-") or args.source != "sessions"):
+    raise LongMemError("dense_full_turns_requires_qdrant_sessions")
   if args.dense_batch is not None:
     if not args.retriever.startswith("qdrant-"):
       raise LongMemError("dense_batch_requires_qdrant")
@@ -1308,6 +1486,13 @@ def _validate_run(args: argparse.Namespace) -> None:
     raise LongMemError("episode_candidate_limit_invalid")
   if args.episodes and args.source != "memories":
     raise LongMemError("episode_candidates_require_memories")
+  if args.source == "chunks":
+    if args.chunk_chars is None:
+      raise LongMemError("chunk_chars_required")
+    if args.chunk_chars <= len("assistant: "):
+      raise LongMemError("chunk_chars_invalid")
+  elif args.chunk_chars is not None:
+    raise LongMemError("chunk_chars_requires_chunks")
   if args.source == "memories":
     if args.artifact is None or not args.artifact_sha256:
       raise LongMemError("memory_artifact_identity_required")
@@ -1350,17 +1535,17 @@ def _unique(values: tuple[str, ...]) -> tuple[str, ...]:
 def _write(path: Path, value: dict[str, Any]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+  partial.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
   os.replace(partial, path)
 
 
 def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> str:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  encoded = "".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values)
-  partial.write_text(encoded)
+  encoded = "".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values).encode("utf-8")
+  partial.write_bytes(encoded)
   os.replace(partial, path)
-  return hashlib.sha256(encoded.encode()).hexdigest()
+  return hashlib.sha256(encoded).hexdigest()
 
 
 def _digest(value: Any) -> str:

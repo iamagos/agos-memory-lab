@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,12 +14,18 @@ import model
 
 @dataclass(frozen=True, slots=True)
 class Config(model.ModelConfig):
+  provider_id: str
   input_cost: float
   output_cost: float
   max_cost: float
 
   def __post_init__(self) -> None:
     model.ModelConfig.__post_init__(self)
+    if (
+      not isinstance(self.provider_id, str)
+      or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", self.provider_id)
+    ):
+      raise CallError("chat_provider_id_invalid")
     for value in (self.input_cost, self.output_cost, self.max_cost):
       if not _number(value) or not math.isfinite(value) or value < 0:
         raise CallError("chat_cost_invalid")
@@ -31,7 +38,11 @@ class CallError(Exception):
 
 
 def arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
-  parser.add_argument("--provider", choices=("openai", "azure"), default="openai")
+  parser.add_argument("--provider", choices=("openai", "azure", "deepseek"), default="openai")
+  parser.add_argument(
+    "--provider-id",
+    help="Stable service identity for receipts (for example deepseek, moonshot, or local-vllm).",
+  )
   parser.add_argument("--model", required=True)
   parser.add_argument("--base-url")
   parser.add_argument("--api-version")
@@ -42,6 +53,11 @@ def arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
     choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
   )
   parser.add_argument("--max-tokens", type=int, default=default_tokens)
+  parser.add_argument(
+    "--max-tokens-field",
+    choices=("max_completion_tokens", "max_tokens"),
+    default="max_completion_tokens",
+  )
   parser.add_argument("--timeout", type=float, default=120.0)
   parser.add_argument("--input-cost", type=float, default=0.0, help="USD per million input tokens.")
   parser.add_argument("--output-cost", type=float, default=0.0, help="USD per million output tokens.")
@@ -49,18 +65,36 @@ def arguments(parser: argparse.ArgumentParser, *, default_tokens: int) -> None:
 
 
 def config(args: argparse.Namespace) -> Config:
-  base_url = args.base_url or ("https://api.openai.com/v1" if args.provider == "openai" else None)
+  default_base_url = {
+    "openai": "https://api.openai.com/v1",
+    "deepseek": "https://api.deepseek.com",
+  }.get(args.provider)
+  base_url = args.base_url or default_base_url
   if base_url is None:
     raise CallError("chat_base_url_required")
+  provider_id = args.provider_id
+  custom_identity_missing = (
+    provider_id is None
+    and args.provider == "openai"
+    and base_url.rstrip("/") != default_base_url
+  )
+  if provider_id is None:
+    provider_id = {
+      "openai": "openai",
+      "azure": "azure-openai",
+      "deepseek": "deepseek",
+    }[args.provider]
   try:
-    return Config(
+    value = Config(
       provider=args.provider,
+      provider_id=provider_id,
       base_url=base_url,
       api_version=args.api_version,
       model=args.model,
       temperature=args.temperature,
       reasoning_effort=args.reasoning_effort,
       max_tokens=args.max_tokens,
+      max_tokens_field=args.max_tokens_field,
       timeout=args.timeout,
       input_cost=args.input_cost,
       output_cost=args.output_cost,
@@ -68,12 +102,24 @@ def config(args: argparse.Namespace) -> Config:
     )
   except model.ModelError as exc:
     raise CallError(str(exc)) from exc
+  if custom_identity_missing:
+    raise CallError("chat_provider_id_required")
+  return value
 
 
 def key(args: argparse.Namespace, *, config: Config) -> str:
-  name = args.api_key_env or (
-    "AZURE_OPENAI_API_KEY" if config.provider == "azure" else "OPENAI_API_KEY"
-  )
+  default_id = {
+    "azure": "azure-openai",
+    "deepseek": "deepseek",
+    "openai": "openai",
+  }[config.provider]
+  if args.api_key_env is None and config.provider_id != default_id:
+    raise CallError("chat_api_key_env_required")
+  name = args.api_key_env or {
+    "azure": "AZURE_OPENAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "openai": "OPENAI_API_KEY",
+  }[config.provider]
   if not isinstance(name, str) or not name.strip():
     raise CallError("chat_api_key_env_invalid")
   value = os.getenv(name)
@@ -92,11 +138,13 @@ def request(config: Config) -> dict[str, Any]:
       "pydantic_ai": model.PYDANTIC_AI_VERSION,
     },
     "provider": config.provider,
+    "provider_id": config.provider_id,
     "base_url": config.base_url,
     "api_version": config.api_version,
     "model": config.model,
     "temperature": config.temperature,
     "max_tokens": config.max_tokens,
+    "max_tokens_field": config.max_tokens_field,
   }
   if config.reasoning_effort is not None:
     value["reasoning_effort"] = config.reasoning_effort
@@ -220,7 +268,7 @@ def begin(path: Path, value: dict[str, Any], *, unknown: str, failed: str) -> No
   path.parent.mkdir(parents=True, exist_ok=True)
   try:
     descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "w") as target:
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as target:
       target.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
       target.flush()
       os.fsync(target.fileno())
@@ -234,7 +282,7 @@ def pending(path: Path, *, error: str) -> dict[str, Any] | None:
   if not path.exists():
     return None
   try:
-    value = json.loads(path.read_text())
+    value = json.loads(path.read_text(encoding="utf-8"))
   except (OSError, json.JSONDecodeError) as exc:
     raise CallError(error) from exc
   if not isinstance(value, dict):

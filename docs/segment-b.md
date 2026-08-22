@@ -1,0 +1,283 @@
+# Segment B: the baseline ladder
+
+Segment B asks one question: **does routing a conversation history through
+`agos-memory` produce a better reader context than retrieving raw sessions, at
+equal cost to the reader?**
+
+It is the first segment that spends money, and the first that can produce a
+number anyone would want to quote. Both facts argue for settling the design
+before any call is made, because most ways of running this experiment measure
+something other than what they claim to.
+
+Read `docs/segment-a.md` first. Segment B inherits its frozen inputs and its
+discipline: nothing is paid for until the credential-free part has been run and
+inspected.
+
+## What Segment B claims, and what it does not
+
+**Claims.** On a fixed 30-case stratified sample of LongMemEval-S, holding
+reader, judge, prompts, and context budget identical, a ranking of acquisition
+and retrieval strategies by answer accuracy, with an explicit accuracy-versus-
+context-budget curve for each.
+
+**Does not claim.** A LongMemEval leaderboard score. A comparison against mem0
+or any other memory product. A result with publication-grade statistical power —
+see [Statistical power](#statistical-power), which is the most important
+limitation in this document.
+
+## Frozen inputs
+
+Identical to Segment A, and unchanged for the life of the segment:
+
+- Benchmark LongMemEval `9e0b455f4ef0e2ab8f2e582289761153549043fc`.
+- Cleaned dataset `98d7416c24c778c2fee6e6f3006e7a073259d48f`.
+- Case manifest `manifests/longmemeval-s-balanced-30-v1.json`,
+  `sha256:3806648c2bb691a59bec7df30cc611dcbea34aefdc7e9841b433a4a0ec103a14`.
+- 30 cases; 26 eligible after excluding 4 abstention cases, which are scored
+  separately and never folded into the headline number.
+
+Any change to these invalidates every receipt in the segment.
+
+## The ladder
+
+Each rung changes exactly one acquisition or retrieval choice. Reader, judge,
+prompts, and budget are held fixed across all of them.
+
+| Rung | Lane | Credentials | Role |
+| --- | --- | --- | --- |
+| 0 | oracle evidence | none for retrieval | Debugging ceiling. **Not a comparable lane** — it reads the gold answer sessions. Use it to detect reader failure, never to claim a result. |
+| 1 | full raw history | none for retrieval | Official no-retrieval control. See the context-window constraint below. |
+| 2 | raw BM25 (`lexical`) | none for retrieval | Primary credential-free control. Already characterised by Gate 4. |
+| 3 | raw dense (`qdrant-dense`) | none for retrieval | Embedding retrieval, local Qdrant + FastEmbed. |
+| 4 | raw hybrid (`qdrant-hybrid`) | none for retrieval | Lexical and dense planes combined. |
+| 5 | extracted AGOS memory (`--source memories`) | **extraction is paid** | The treatment. Requires Segment A Gate 5 first. |
+
+Rungs 1-4 need no credentials for the retrieval half; only the reader and judge
+cost money. Rung 5 additionally requires a paid extraction pass over the corpus.
+
+Rungs 3 and 4 run through the PEP 723 script header, not the project venv:
+
+```powershell
+uv run longmem.py run --retriever qdrant-dense ...
+```
+
+`.venv\Scripts\python.exe` raises `qdrant_dependency_missing:run_with_uv_script`
+for those two lanes. The embedding model is already cached under `data/models/`,
+so they are offline; budget roughly 30 seconds per case.
+
+## Budget parity: the central design decision
+
+This is the part that is easy to get wrong, and getting it wrong invalidates the
+whole segment.
+
+The raw lanes select **whole sessions**, which measured at roughly 12,500
+characters each. The memory lane selects **extracted memories**, which are
+one or two orders of magnitude smaller. So "give both lanes the same budget"
+means two completely different experiments depending on how budget is denominated:
+
+- **Equal item budget** (`--top-k`) hands the raw lanes vastly more text for the
+  same nominal budget. It flatters raw retrieval and is indefensible.
+- **Equal character budget** (`--chars`) lets the memory lane fit far more items
+  into the same reader context. This is the honest one, because characters are
+  what the reader actually pays for.
+
+**Decision: reader parity is equal selected characters, while retrieval depth
+is an independent experimental axis.** Equal candidate count is not parity:
+raw cases average about 48 sessions while this artifact averages roughly 570
+memory records. A lane that exhausts its ranking below a nominal character cap
+has not received the same reader budget.
+
+Gate 4 demonstrated why this needs saying out loud. Its defaults were
+`--top-k 10 --chars 180000`, and the kernel selected exactly 10 sessions on
+every case while using only 123,318 characters — a mean 68% of the cap. The run
+was **item-bound, not character-bound**, and the item cap was doing invisible
+work. Every answer session it dropped is recorded in `kernel.outcomes` with
+`reason: item_budget`.
+
+Segment B therefore composes four explicit stages:
+
+```text
+frozen candidate ranking
+  × retrieval depth
+  × reader character budget
+  -> kernel selection receipt
+  -> calibrated coverage
+  -> only then paid QA
+```
+
+Candidate ranking is computed once per lane and reused. Retrieval depth slices
+that immutable ranking; it is reported and swept, not equated across unlike
+item types. The kernel then applies the reader character budget with
+`lexical_weight=0`, preserving upstream attribution. PR #43 owns the ranking
+reuse seam and must land before dense grids are executed; this artifact PR does
+not reimplement it.
+
+### The budget grid
+
+The earlier 45k–360k proposal is retired: top-100 memory rankings often contain
+far less than 45,000 characters, so those nominal caps were not controlled
+reader budgets. The current credential-free calibration grid is:
+
+| Budget | `--chars` | Approx. reader tokens |
+| --- | ---: | ---: |
+| B1 | 2,400 | ~600 |
+| B2 | 4,800 | ~1,200 |
+| B3 | 9,600 | ~2,400 |
+| B4 | 14,400 | ~3,600 |
+
+These points are diagnostics, not a commitment to four paid reader cells. A
+cell is reader-comparable only when the frozen ranking and chosen depth supply
+the intended selected characters in every compared lane. Receipts report
+realized characters; token figures assume ~4 characters per token for planning.
+
+### The full-history control has a context-window problem
+
+Measured on all 30 manifest cases with the caps lifted, the complete haystack is:
+
+| Statistic | Value |
+| --- | ---: |
+| Mean characters per case | 498,276 |
+| Median | 498,336 |
+| **Maximum** | **510,501** |
+| Mean sessions per case | 47.9 |
+| Cases truncated | 0 of 30 |
+
+The largest case is roughly **127,600 tokens** before the prompt and question are
+added. A 128k-context reader cannot hold it. Either pick a reader with a context
+window comfortably above 128k, or run rung 1 at an explicit character cap and
+report it as a *truncated* full-history control — never as "full history"
+unqualified.
+
+## Free pre-flight: bound every lane before paying for any
+
+Gold-session recall and strict literal coverage are computable with **no model
+call at all**. Neither is an answerability ceiling: complete raw history contains
+the exact gold string for only 12/26 answerable cases, and a gold session may
+support a derived answer without containing that final string. They are
+retrieval and extraction diagnostics; bounded QA determines semantic adequacy.
+
+So the first phase of Segment B costs nothing:
+
+1. Freeze one candidate ranking per lane. Dense and hybrid rankings are built
+   once and reused, never rebuilt for each depth/budget cell.
+2. Slice each ranking at the predeclared retrieval depths, then apply each
+   feasible reader character budget through the kernel.
+3. For each cell compute full / partial / missing gold-session coverage and
+   calibrated literal coverage over the 12 literal-applicable cases.
+4. Inspect the `reason` field on every omission, exactly as the Gate 4 follow-up
+   did. A `char_budget` omission is the experiment working as designed. Anything
+   else is a bug to fix before spending.
+
+Only then choose which cells are worth a reader call. The 14 nonliteral cases
+remain in the bounded reader experiment; the literal probe does not exclude
+them.
+
+This phase is also the honest place to discover that a lane is broken, and it is
+free to repeat.
+
+## Measurement
+
+- **Primary.** Judge-scored accuracy over the 26 eligible cases, per lane, per
+  budget point, plotted against measured input tokens.
+- **Secondary.** Abstention accuracy over the 4 abstention cases, reported
+  separately and never averaged into the primary number.
+- **Descriptive.** Answer-evidence coverage, item counts, and characters
+  selected. Item counts are reported, never controlled.
+- **Per stratum.** All six question types, because Gate 4 showed they behave very
+  differently — `single-session-user` scored a perfect 1.000 on kernel recall
+  while `single-session-preference` scored 0.200 at rank 1.
+
+Reader and judge are pinned model identities with hard cost caps, run through
+`qa.py read` and `qa.py judge`. Receipts are joined by `compare.py`, which makes
+no model call and performs no retrieval — it only joins completed receipts, so
+the comparison itself cannot silently introduce a difference.
+
+## Cost model
+
+The measured token volumes are the reliable part; prices are not, and must be
+filled in from the actual deployment before anything is authorised.
+
+Do not price a nominal grid before the pre-flight selects feasible cells. Reader
+input is calculated from the exact frozen contexts that will be sent, using
+actual selected characters and provider token estimates. Reader output remains
+small (~200 tokens per answer); the judge sees only question, hypothesis, and
+reference, on the order of 1,000 tokens per case.
+
+Two consequences worth internalising before choosing a reader:
+
+- The **reader** dominates total cost, and it scales with the selected paid
+  cells and their realized context sizes.
+- The **extractor** for rung 5 processes the whole haystack — 14.9M characters,
+  roughly 3.7M input tokens — once. It should be a small model, which is
+  convenient, because Segment C sweeps exactly that choice.
+
+Every call already carries `--max-cost`, which is the real-time guard. Azure
+budget alerts fire on actual spend and lag by hours; they are not a control.
+
+### Rate limit is a precondition, not a scheduling detail
+
+Dollars are not the only ceiling. A deployment's tokens-per-minute allowance has
+to exceed the **largest single call** in the chosen cells, not merely the average
+throughput, because a request whose estimated tokens exceed a whole minute's
+allowance is refused rather than queued. The full-history control's largest case
+is ~127,600 input tokens before prompt overhead; bounded cells must be estimated
+from their frozen context files.
+
+A low-TPM deployment therefore does not run the segment slowly; it does not run
+it at all, while a small judge-only call on the same deployment succeeds and
+makes the endpoint look healthy. Read the deployment's TPM and RPM before
+choosing a reader, and have the one live qualification call confirm that a
+representative reader-sized request is admitted — not just that the endpoint
+answers.
+
+## Statistical power
+
+**This is the limitation that matters most, and it should appear in any writeup
+of the results.**
+
+There are 26 eligible paired cases. For a paired accuracy comparison between two
+lanes, McNemar's exact test needs at least **six discordant pairs, all favouring
+the same lane**, to reach p < 0.05 two-sided; five all in one direction gives
+p = 0.0625. Six of 26 is a 23 percentage point gap.
+
+So Segment B on this manifest can detect only large effects. It is a **protocol
+validation and an effect-size direction finder**, not evidence of a small
+improvement. If the ladder produces a gap under roughly 20 points — which is the
+likely outcome — the correct conclusion is "underpowered, direction observed",
+and the next step is the full 500-case LongMemEval-S, not a louder claim.
+
+Designing for this now is cheaper than discovering it after the money is spent.
+
+## Execution order
+
+1. **Free.** Freeze one ranking per lane, then materialize the declared
+   (retrieval depth, reader budget) cells. Inspect coverage, realized characters,
+   and every omission `reason`.
+2. **Free.** Publish the coverage table. Choose which cells earn a reader call.
+3. **Gated.** Segment A Gate 3 — qualify the endpoint with one live call.
+4. **Gated.** Segment A Gate 5 — live extraction on one complete case, inspected,
+   before authorising the rest of the sample.
+5. **Paid.** Extraction over the fixed sample, producing the rung 5 artifact.
+6. **Paid.** Reader, then judge, on the chosen cells. Rungs 1-4 first: they are
+   the controls, and a broken control invalidates the treatment anyway.
+7. **Free.** `compare.py` joins receipts into the final comparison.
+
+Each paid step needs its own fresh approval under the controlled-resource rule in
+the project handoff: exact endpoint and model, case window and maximum call
+count, prices and hard USD cap, files written, and stop condition.
+
+## Open decisions
+
+These need an owner before step 3, and each changes what the segment measures:
+
+1. **Reader model.** Must have a context window above ~128k tokens if rung 1 is
+   to be a genuine full-history control. This is the single most consequential
+   choice in the segment.
+2. **Judge model.** LongMemEval's official judge, or a pinned substitute? A
+   substitute must be justified, because it changes comparability with published
+   LongMemEval numbers.
+3. **Availability mode.** `released` or `causal`. Both are supported and must be
+   identical within any comparison pair.
+4. **Budget grid.** Keep all four points, or drop B4 to nearly halve the cost?
+5. **Whether to run rung 5 at all on 30 cases**, given the power analysis, or
+   move straight to the full sample once the protocol is validated.

@@ -61,11 +61,13 @@ def test_reader_checkpoints_and_exact_resume_makes_no_second_call(
         "pydantic_ai": "2.21.0",
       },
       "provider": "openai",
+      "provider_id": "openai",
       "base_url": "https://api.openai.com/v1",
       "api_version": None,
       "model": "reader-v1",
       "temperature": None,
       "max_tokens": 1_000,
+      "max_tokens_field": "max_completion_tokens",
     },
     "execution": {
       "timeout": 120.0,
@@ -170,12 +172,15 @@ def test_request_identity_excludes_execution_policy() -> None:
     {"base_url": "https://example.com/v1"},
     {
       "provider": "azure",
+      "provider_id": "azure-openai",
       "base_url": "https://resource.openai.azure.com/openai/v1",
     },
+    {"provider_id": "deepseek"},
     {"model": "reader-v2"},
     {"temperature": 0.5},
     {"reasoning_effort": "minimal"},
     {"max_tokens": 999},
+    {"max_tokens_field": "max_tokens"},
   ],
 )
 def test_request_identity_includes_request_semantics(change: dict[str, object]) -> None:
@@ -192,12 +197,14 @@ def test_request_identity_includes_azure_api_version() -> None:
   context = qa.Context(RUN_ID, "degree", "What degree?", "2024/01/03", "context", "b" * 64)
   config = qa.ChatConfig(
     provider="azure",
+    provider_id="azure-openai",
     base_url="https://resource.openai.azure.com",
     api_version="2025-04-01-preview",
     model="reader-v1",
     temperature=None,
     reasoning_effort=None,
     max_tokens=1_000,
+    max_tokens_field="max_completion_tokens",
     timeout=120,
     input_cost=0,
     output_cost=0,
@@ -303,6 +310,7 @@ def test_official_judge_scores_and_exact_resume_makes_no_second_call(
   assert len(calls) == 3
   assert summary["accuracy"] == 1.0
   assert summary["task_accuracy"] == 1.0
+  assert summary["benchmark_weighted_accuracy"] == 1.0
   assert summary["abstention_accuracy"] == 1.0
   assert summary["by_type"]["single-session-user"] == {"cases": 2, "accuracy": 1.0}
   assert summary["by_type"]["knowledge-update"] == {"cases": 1, "accuracy": 1.0}
@@ -367,6 +375,75 @@ def test_official_label_is_reported_separately_from_strict_parse() -> None:
   assert qa._labels("No. The answer is unsupported.") == (False, False)
 
 
+def test_reader_prompt_revision_is_bound_to_prompt_request_and_receipt(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  contexts = tmp_path / "contexts.jsonl"
+  out = tmp_path / "hypotheses.jsonl"
+  _write_jsonl(contexts, [_context("degree", "What degree?", "Business Administration")])
+  control = _args("read", "--contexts", str(contexts), "--out", str(out), "--model", "reader-v1")
+  exact = _args(
+    "read",
+    "--contexts",
+    str(contexts),
+    "--out",
+    str(out),
+    "--model",
+    "reader-v1",
+    "--reader-prompt",
+    "longmem-exact-v1",
+  )
+  context = qa._contexts(contexts)[0][0]
+  config = qa._config(control)
+  prompts: list[str] = []
+  monkeypatch.setenv("OPENAI_API_KEY", "secret")
+  monkeypatch.setattr(
+    qa,
+    "_chat",
+    lambda prompt, **_kwargs: (
+      prompts.append(prompt) or qa.ChatResult("FINAL ANSWER: Business Administration", "reader-v1", 20, 3, 23)
+    ),
+  )
+
+  assert control.reader_prompt == qa._PROMPT_REVISION
+  assert qa._reader_id(context, config) != qa._reader_id(
+    context,
+    config,
+    prompt_revision="longmem-exact-v1",
+  )
+  qa._read(exact)
+
+  receipt = json.loads(out.with_suffix(".jsonl.receipt.json").read_text())
+  assert prompts and "FINAL ANSWER" in prompts[0]
+  assert receipt["prompt_revision"] == "longmem-exact-v1"
+
+
+def test_benchmark_weighted_accuracy_uses_population_strata() -> None:
+  population = tuple(
+    [qa.Reference(str(index), "single-session-user", "q", "a", False) for index in range(9)]
+    + [qa.Reference("missing_abs", "single-session-user", "q", "a", True)]
+  )
+  records = [
+    {
+      "question_type": "single-session-user",
+      "abstention": False,
+      "official_label": False,
+      "strict_label": False,
+    },
+    {
+      "question_type": "single-session-user",
+      "abstention": True,
+      "official_label": True,
+      "strict_label": True,
+    },
+  ]
+
+  scores = qa._scores(records, population=population)
+
+  assert scores["accuracy"] == 0.5
+  assert scores["benchmark_weighted_accuracy"] == 0.1
+
+
 def _args(*values: str):
   return qa._parser().parse_args(values)
 
@@ -374,12 +451,14 @@ def _args(*values: str):
 def _chat_config() -> qa.ChatConfig:
   return qa.ChatConfig(
     provider="openai",
+    provider_id="openai",
     base_url="https://api.openai.com/v1",
     api_version=None,
     model="reader-v1",
     temperature=None,
     reasoning_effort=None,
     max_tokens=1_000,
+    max_tokens_field="max_completion_tokens",
     timeout=120,
     input_cost=0,
     output_cost=0,
