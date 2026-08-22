@@ -309,9 +309,9 @@ official label.
 
 ## Gap probes and endpoint profiles
 
-`probe.py` derives reader-testability, failure codes, and retrieval-score
-answerability signals from existing artifacts. It reads no credential and makes
-no model request:
+`probe.py` derives full-history-calibrated literal coverage, failure codes, and
+retrieval-score answerability signals from existing artifacts. It reads no
+credential and makes no model request:
 
 ```bash
 uv run python probe.py check-operand \
@@ -324,6 +324,12 @@ uv run python probe.py answerability \
   --dataset s \
   --out runs/longmem-s-answerability.json
 ```
+
+`check-operand` first checks whether the exact gold string exists anywhere in
+complete rendered history. Selected-context present/absent coverage is reported
+only within that literal-applicable subset. Derived, normalized, paraphrastic,
+and rubric answers are identified as inapplicable to the strict string probe;
+they are not labelled unanswerable or excluded from reader experiments.
 
 The zero-call verbatim control retrieves bounded, role-prefixed source chunks
 while retaining the original session identity for recall:

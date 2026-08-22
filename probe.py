@@ -89,14 +89,26 @@ def _check_operand(args: argparse.Namespace) -> dict[str, Any]:
   contexts, contexts_sha256 = qa._contexts(args.contexts)
   references, source = qa._references(args)
   by_id = {reference.question_id: reference for reference in references}
-  if any(context.question_id not in by_id for context in contexts):
+  corpus = {case.question_id: case for case in _corpus(args)}
+  if any(context.question_id not in by_id or context.question_id not in corpus for context in contexts):
     raise ProbeError("operand_context_reference_mismatch")
   cases = []
   for context in contexts:
     reference = by_id[context.question_id]
     present = _contains(context.context, reference.answer)
-    testability = "not-applicable" if reference.abstention else (
-      "reader-testable" if present else "not-reader-testable"
+    full_history_present = None if reference.abstention else _contains_any(
+      tuple(
+        f"Session Date: {session.date}\nSession Content:\n{session.content}"
+        for session in corpus[context.question_id].sessions
+      ),
+      reference.answer,
+    )
+    status = "not-applicable" if reference.abstention else (
+      "derived-or-normalized"
+      if not full_history_present
+      else "present"
+      if present
+      else "absent"
     )
     cases.append(
       {
@@ -106,21 +118,26 @@ def _check_operand(args: argparse.Namespace) -> dict[str, Any]:
         "context_sha256": context.context_sha256,
         "operand_sha256": _text_digest(reference.answer),
         "operand_present": present,
-        "reader_testability": testability,
+        "full_history_operand_present": full_history_present,
+        "literal_status": status,
       }
     )
+  answerable = [case for case in cases if not case["abstention"]]
+  applicable = [case for case in answerable if case["full_history_operand_present"]]
   return _receipt(
-    "agos-memory-lab-operand-probe-v1",
+    "agos-memory-lab-operand-probe-v2",
     sources={
       "contexts": {"file": args.contexts.name, "sha256": contexts_sha256},
       "references": source,
     },
     summary={
       "cases": len(cases),
-      "answerable": sum(not case["abstention"] for case in cases),
-      "abstention": sum(case["abstention"] for case in cases),
-      "reader_testable": sum(case["reader_testability"] == "reader-testable" for case in cases),
-      "not_reader_testable": sum(case["reader_testability"] == "not-reader-testable" for case in cases),
+      "answerable": len(answerable),
+      "abstention": len(cases) - len(answerable),
+      "literal_applicable": len(applicable),
+      "derived_or_normalized": len(answerable) - len(applicable),
+      "literal_present": sum(case["literal_status"] == "present" for case in applicable),
+      "literal_absent": sum(case["literal_status"] == "absent" for case in applicable),
     },
     cases=cases,
   )

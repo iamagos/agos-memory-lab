@@ -2,8 +2,11 @@
 
 > **Status update — 2026-08-21.** E0 is no longer externally blocked: the
 > frozen balanced-30 GPT-5 artifact and complete extractor were acquired and
-> validated. Its 2,400-character exact-operand gate passes 8/26 answerable
-> cases. The current findings and Mem0 comparability boundary are recorded in
+> validated. Complete history contains the exact gold string for only 12/26
+> answerable cases; the 2,400-character memory context preserves 8/12 of that
+> literal-applicable subset. This is a strict string diagnostic, not an
+> answerability gate, and it does not exclude the 14 derived/normalized cases
+> from a bounded reader run. The current findings and Mem0 comparability boundary are recorded in
 > [`frozen-30-gpt5-run.md`](frozen-30-gpt5-run.md); historical planning below is
 > retained for provenance.
 
@@ -300,14 +303,14 @@ in a headline number, and E4's holdout must be disjoint from them.
 
 ### E1 — Is the evidence in *our* context? (free)
 
-**Question.** For each case in the artifact, does the context our own memory lane
-selects contain the literal operand the gold answer requires?
+**Question.** For each literal-applicable case, does the selected memory context
+preserve the exact gold string found in complete history?
 
 The collaborator's version of this question was whether his three failures were
 reader defects or retrieval defects. Since we are no longer reproducing his run,
-the question becomes the one that actually governs the pilot: **whichever cases
-fail E1 cannot be used to test a reader contract at all**, because no prompt can
-recover an operand that is not in the context.
+the literal check becomes one calibrated diagnostic. A miss can identify exact
+value loss only when complete history contains the same string; it cannot decide
+whether a derived, normalized, or rubric answer is reader-testable.
 
 The distinction that makes this worth checking is unchanged. Recall metrics score
 the *answer session*; the reader consumes the *selected context*. On the memory
@@ -322,13 +325,13 @@ figures that determine it are present, rather than only figures that would
 support a range. No model call. The gold answers are short: median 11
 characters, which makes this a mechanical string check on most cases.
 
-**Output.** A partition of the artifact's cases into *reader-testable* (operand
-present) and *not reader-testable* (operand absent). E3 and E4 draw only from the
-first group; the second is evidence about extraction and selection, and feeds E2.
+**Output.** Source-literal applicability from complete history, then
+present/absent selected-context coverage within that subset. E3 and E4 retain
+all answerable cases; only semantic QA can measure their answerability.
 
-**Falsifier for the whole pilot.** If the operand is absent on most cases, the
-reader contract is not the first defect and E3 is the wrong experiment — the
-pilot pivots to E2 and the artifact contract as its primary line.
+**Falsifier for the literal diagnostic.** If the exact answer is absent from
+complete history, the case is inapplicable to this probe and cannot support a
+claim about reader failure or sufficiency.
 
 ### E2 — Audit provenance in the memory lane (free)
 
@@ -390,10 +393,9 @@ reader completely: no retrieval runs, nothing else can move.
 | R1 | `longmem-exact-v1` | R0 plus a final-line answer contract: the exact value, no range, no hedge, when the context determines it. |
 | R2 | `longmem-exact-abstain-v1` | R1 plus an abstention clause and a provenance rule — only statements the user made count as evidence about the user; absence of a fact is not evidence of it. |
 
-**Volume.** 10 reader-testable cases x 3 variants = 30 reader calls at ~700 input
-tokens and `--max-tokens 300`, plus 30 judge calls at ~510 metered. About 37,000
-tokens total, and 60 minutes of wall clock at 1 RPM. The case count is whatever
-E1 declares reader-testable, capped at 10 to keep the run inside an hour.
+**Volume.** Freeze the chosen bounded contexts before pricing. The case count is
+not filtered by literal applicability; any development cap is declared
+independently and stratified across question types.
 
 **Code change required.** `qa.py read` gains `--reader-prompt`, selecting from a
 frozen registry of revisions. The revision string is already part of request
@@ -444,9 +446,9 @@ inspected. Its result is not evidence of anything until it transfers.
 
 **Procedure.** Draw up to 20 further cases stratified across the six question
 types, seeded and frozen as `manifests/reader-holdout-20-v1.json`, **disjoint
-from E3's cases** and drawn only from those E1 declared reader-testable. Run the
-E3 winner and R0 only — two lanes, not three, because the loser has already been
-eliminated.
+from E3's cases**. Literal applicability is reported as a stratum, not used as
+an inclusion rule. Run the E3 winner and R0 only — two lanes, not three, because
+the loser has already been eliminated.
 
 **This is what E0's coverage question decides.** The holdout exists only if the
 artifact covers enough cases to supply it. If it does not, E4 cannot run here at
@@ -489,9 +491,10 @@ than session dialogue and may tokenise worse than the 4.43 characters-per-token
 floor measured on raw sessions. If it does, `--chars` comes down until the
 measured worst case clears 1,000.
 
-**Decision it produces.** Coverage holds at 2,400 → E3 runs on Azure as
-specified. Coverage collapses → E3 and E4 move to a local reader, and Azure
-keeps only the judge.
+**Decision it produces.** Freeze candidate rankings, sweep retrieval depth and
+reader character budget independently, and choose bounded contexts using
+session recall plus calibrated literal coverage. Neither metric alone vetoes a
+reader run; PR #43 owns ranking reuse.
 
 ## What this costs
 

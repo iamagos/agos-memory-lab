@@ -23,8 +23,11 @@ JSONL files are treated as opaque bytes and their large diffs are disabled in
 | `azure-gpt-5-qualification.json` | 1,585 | Qualification receipt for the served GPT-5 deployment |
 | `memory-lexical-2400.json` | 4,577,792 | Zero-call lexical retrieval and governed-selection receipt |
 | `memory-lexical-2400-contexts.jsonl` | 131,700 | Gold-free selected contexts bound to the retrieval receipt |
-| `memory-lexical-2400-operands.json` | 12,374 | Exact-operand coverage probe bound to those contexts |
+| `memory-lexical-2400-operands.json` | 13,556 | Full-history-calibrated literal coverage probe bound to those contexts |
 | `memory-attribution-audit.json` | 6,438 | High-precision `User`/`Assistant` marker audit |
+| `raw-full-600000.json` | 1,181,782 | Zero-call full-history selection receipt: all 1,436 sessions, no truncation |
+| `raw-full-600000-contexts.jsonl` | 15,189,994 | Full rendered histories used only to calibrate literal applicability |
+| `raw-full-600000-operands.json` | 13,553 | Full-history control: 12/26 source-literal, 14/26 derived or normalized |
 
 The extraction receipt names the original scratch filenames. The published
 extractor and state files were renamed for a coherent handoff; their contents
@@ -57,3 +60,17 @@ uv run python memory.py \
 
 The recompiled file must hash to
 `010679fb2b9035b5e7d6157bba9e19cf5319a421af0d8dfb2f6b026e6f45a0f6`.
+
+The operand receipt is a strict string diagnostic, not an answerability label.
+It first checks the exact gold string against complete rendered history. Only
+the 12/26 answerable cases where that string exists are literal-applicable; the
+remaining 14 require derivation, normalization, paraphrase, or rubric-based
+judgement. The 2,400-character memory receipt reports 8/12 within the applicable
+subset. Reproduce the calibration with:
+
+```bash
+uv run python probe.py check-operand \
+  --contexts artifacts/longmemeval-s-balanced-30-v1/raw-full-600000-contexts.jsonl \
+  --dataset s \
+  --out runs/raw-full-600000-operands.json
+```

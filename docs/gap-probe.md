@@ -75,13 +75,12 @@ identity projection, preserving run IDs for unchanged completed requests.
 
 ### G0.2 — literal operand coverage
 
-`probe.py check-operand` joins a contexts JSONL to verified references. For each
-answerable case it records whether the complete case-folded gold answer is a
-literal substring of selected context. Abstention cases are `not-applicable`.
-This is intentionally a high-precision, low-recall check: paraphrases and
-multi-part rubrics can be semantically present while failing the literal test.
-Reader experiments may claim literal reader-testability only for the positive
-partition.
+`probe.py check-operand` joins a contexts JSONL to verified references and the
+verified source corpus. It first determines whether the exact case-folded gold
+answer occurs in complete rendered history. Only those source-literal cases are
+applicable to selected-context present/absent coverage; the remainder are
+reported as derived or normalized. Abstention cases are `not-applicable`. This
+is a strict string trace, not an answerability test or a reader inclusion gate.
 
 ### G0.3 — mechanical failure coding
 
@@ -193,8 +192,10 @@ Measured in this repository on 2026-08-21:
   `134 passed` before changes.
 - The pinned corpus receipt contains 500 cases: 470 answerable and 30
   abstention, with the type counts above.
-- Zero-call literal coverage on the existing 500-case lexical contexts:
-  233 reader-testable and 237 not-reader-testable answerable cases.
+- The legacy uncalibrated string count on the existing 500-case lexical
+  contexts is 233 present and 237 absent answerable cases. It predates the
+  full-history applicability control and must not be described as
+  reader-testability.
 - Zero-call BM25 answerability AUROC on the same receipt: top-1 `0.68042553`,
   margin `0.58929078`, mean top-k score `0.65900709`. This is a probe signal,
   not a threshold or a causal result.

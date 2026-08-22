@@ -11,8 +11,13 @@ FIXTURE_SHA256 = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
 RUN_ID = "a" * 64
 
 
-def test_check_operand_partitions_answerable_contexts(tmp_path: Path) -> None:
+def test_check_operand_calibrates_literal_coverage_against_full_history(tmp_path: Path) -> None:
   contexts = tmp_path / "contexts.jsonl"
+  values = json.loads(FIXTURE.read_text())
+  values[1]["answer"] = "Green, after changing from blue"
+  references = tmp_path / "references.json"
+  references.write_text(json.dumps(values))
+  references_sha256 = hashlib.sha256(references.read_bytes()).hexdigest()
   _jsonl(
     contexts,
     [
@@ -26,9 +31,9 @@ def test_check_operand_partitions_answerable_contexts(tmp_path: Path) -> None:
     "--contexts",
     str(contexts),
     "--references",
-    str(FIXTURE),
+    str(references),
     "--sha256",
-    FIXTURE_SHA256,
+    references_sha256,
     "--revision",
     "fixture-v1",
     "--out",
@@ -41,12 +46,15 @@ def test_check_operand_partitions_answerable_contexts(tmp_path: Path) -> None:
     "cases": 3,
     "answerable": 2,
     "abstention": 1,
-    "reader_testable": 1,
-    "not_reader_testable": 1,
+    "literal_applicable": 1,
+    "derived_or_normalized": 1,
+    "literal_present": 1,
+    "literal_absent": 0,
   }
-  assert [case["reader_testability"] for case in receipt["cases"]] == [
-    "reader-testable",
-    "not-reader-testable",
+  assert receipt["schema"] == "agos-memory-lab-operand-probe-v2"
+  assert [case["literal_status"] for case in receipt["cases"]] == [
+    "present",
+    "derived-or-normalized",
     "not-applicable",
   ]
 

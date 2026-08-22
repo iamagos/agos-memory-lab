@@ -81,7 +81,11 @@ means two completely different experiments depending on how budget is denominate
   into the same reader context. This is the honest one, because characters are
   what the reader actually pays for.
 
-**Decision: freeze `--chars`, and make it the only budget that binds.**
+**Decision: reader parity is equal selected characters, while retrieval depth
+is an independent experimental axis.** Equal candidate count is not parity:
+raw cases average about 48 sessions while this artifact averages roughly 570
+memory records. A lane that exhausts its ranking below a nominal character cap
+has not received the same reader budget.
 
 Gate 4 demonstrated why this needs saying out loud. Its defaults were
 `--top-k 10 --chars 180000`, and the kernel selected exactly 10 sessions on
@@ -90,30 +94,41 @@ was **item-bound, not character-bound**, and the item cap was doing invisible
 work. Every answer session it dropped is recorded in `kernel.outcomes` with
 `reason: item_budget`.
 
-To prevent a hidden second control, every Segment B run sets:
+Segment B therefore composes four explicit stages:
 
-- `--top-k 100` — the maximum, so it never binds.
-- `--candidates 100` — the maximum, so the candidate pool is not a differing
-  control between lanes.
-- `--chars <B>` — the single swept budget.
+```text
+frozen candidate ranking
+  × retrieval depth
+  × reader character budget
+  -> kernel selection receipt
+  -> calibrated coverage
+  -> only then paid QA
+```
+
+Candidate ranking is computed once per lane and reused. Retrieval depth slices
+that immutable ranking; it is reported and swept, not equated across unlike
+item types. The kernel then applies the reader character budget with
+`lexical_weight=0`, preserving upstream attribution. PR #43 owns the ranking
+reuse seam and must land before dense grids are executed; this artifact PR does
+not reimplement it.
 
 ### The budget grid
 
-Gate 4's follow-up sweep showed answer-evidence coverage is a strong, near-linear
-function of the character budget, which means any **single-point** comparison is
-a budget artifact waiting to happen. Segment B therefore reports curves.
-
-Grid, anchored on the Gate 4 default and doubling either side:
+The earlier 45k–360k proposal is retired: top-100 memory rankings often contain
+far less than 45,000 characters, so those nominal caps were not controlled
+reader budgets. The current credential-free calibration grid is:
 
 | Budget | `--chars` | Approx. reader tokens |
 | --- | ---: | ---: |
-| B1 | 45,000 | ~11,000 |
-| B2 | 90,000 | ~22,000 |
-| B3 | 180,000 | ~45,000 |
-| B4 | 360,000 | ~90,000 |
+| B1 | 2,400 | ~600 |
+| B2 | 4,800 | ~1,200 |
+| B3 | 9,600 | ~2,400 |
+| B4 | 14,400 | ~3,600 |
 
-Token figures assume ~4 characters per token and are for planning only; the
-receipts record actual usage.
+These points are diagnostics, not a commitment to four paid reader cells. A
+cell is reader-comparable only when the frozen ranking and chosen depth supply
+the intended selected characters in every compared lane. Receipts report
+realized characters; token figures assume ~4 characters per token for planning.
 
 ### The full-history control has a context-window problem
 
@@ -135,24 +150,27 @@ unqualified.
 
 ## Free pre-flight: bound every lane before paying for any
 
-Answer-evidence coverage — whether the session containing the answer survives
-into the selected context — is computable with **no model call at all**, from the
-`longmem.py run` receipt alone. It is a hard ceiling on what the reader can
-possibly get right.
+Gold-session recall and strict literal coverage are computable with **no model
+call at all**. Neither is an answerability ceiling: complete raw history contains
+the exact gold string for only 12/26 answerable cases, and a gold session may
+support a derived answer without containing that final string. They are
+retrieval and extraction diagnostics; bounded QA determines semantic adequacy.
 
 So the first phase of Segment B costs nothing:
 
-1. Run every (lane, budget) cell credential-free. That is 4 retrieval lanes x 4
-   budgets, plus oracle and full history: 18 runs.
-2. For each cell compute full / partial / missing answer-session coverage over
-   the 26 eligible cases.
-3. Inspect the `reason` field on every omission, exactly as the Gate 4 follow-up
+1. Freeze one candidate ranking per lane. Dense and hybrid rankings are built
+   once and reused, never rebuilt for each depth/budget cell.
+2. Slice each ranking at the predeclared retrieval depths, then apply each
+   feasible reader character budget through the kernel.
+3. For each cell compute full / partial / missing gold-session coverage and
+   calibrated literal coverage over the 12 literal-applicable cases.
+4. Inspect the `reason` field on every omission, exactly as the Gate 4 follow-up
    did. A `char_budget` omission is the experiment working as designed. Anything
    else is a bug to fix before spending.
 
-Only then choose which cells are worth a reader call. Cells whose coverage is
-identical will almost certainly produce near-identical accuracy, and paying to
-confirm that is a poor use of the budget.
+Only then choose which cells are worth a reader call. The 14 nonliteral cases
+remain in the bounded reader experiment; the literal probe does not exclude
+them.
 
 This phase is also the honest place to discover that a lane is broken, and it is
 free to repeat.
@@ -179,24 +197,16 @@ the comparison itself cannot silently introduce a difference.
 The measured token volumes are the reliable part; prices are not, and must be
 filled in from the actual deployment before anything is authorised.
 
-Per lane, per budget point, reader input tokens ≈ `30 x B_tokens`:
-
-| Budget | Reader input tokens per lane |
-| --- | ---: |
-| B1 (45k chars) | ~340,000 |
-| B2 (90k chars) | ~675,000 |
-| B3 (180k chars) | ~1,350,000 |
-| B4 (360k chars) | ~2,700,000 |
-
-Four retrieval lanes across the full grid is therefore ~20.3M reader input
-tokens, plus ~3.7M for the single full-history control. Reader output is small
-(~200 tokens per answer). The judge sees only question, hypothesis, and
-reference — on the order of 1,000 tokens per case.
+Do not price a nominal grid before the pre-flight selects feasible cells. Reader
+input is calculated from the exact frozen contexts that will be sent, using
+actual selected characters and provider token estimates. Reader output remains
+small (~200 tokens per answer); the judge sees only question, hypothesis, and
+reference, on the order of 1,000 tokens per case.
 
 Two consequences worth internalising before choosing a reader:
 
-- The **reader** dominates total cost, and it scales linearly with the budget
-  grid. Dropping B4 nearly halves the segment.
+- The **reader** dominates total cost, and it scales with the selected paid
+  cells and their realized context sizes.
 - The **extractor** for rung 5 processes the whole haystack — 14.9M characters,
   roughly 3.7M input tokens — once. It should be a small model, which is
   convenient, because Segment C sweeps exactly that choice.
@@ -209,8 +219,9 @@ budget alerts fire on actual spend and lag by hours; they are not a control.
 Dollars are not the only ceiling. A deployment's tokens-per-minute allowance has
 to exceed the **largest single call** in the chosen cells, not merely the average
 throughput, because a request whose estimated tokens exceed a whole minute's
-allowance is refused rather than queued. At B3 that single call is ~45,000 input
-tokens, and the full-history control's largest case is ~127,600.
+allowance is refused rather than queued. The full-history control's largest case
+is ~127,600 input tokens before prompt overhead; bounded cells must be estimated
+from their frozen context files.
 
 A low-TPM deployment therefore does not run the segment slowly; it does not run
 it at all, while a small judge-only call on the same deployment succeeds and
@@ -239,7 +250,8 @@ Designing for this now is cheaper than discovering it after the money is spent.
 
 ## Execution order
 
-1. **Free.** Run all 18 credential-free (lane, budget) cells. Inspect coverage
+1. **Free.** Freeze one ranking per lane, then materialize the declared
+   (retrieval depth, reader budget) cells. Inspect coverage, realized characters,
    and every omission `reason`.
 2. **Free.** Publish the coverage table. Choose which cells earn a reader call.
 3. **Gated.** Segment A Gate 3 — qualify the endpoint with one live call.

@@ -71,5 +71,6 @@ hash contract. Preserve the received bytes and request a corrected package.
 - `codex/segment-b-e0-e4` owns opaque intake, validation, and split manifests.
 - `codex/verbatim-evidence-probe` remains a closed negative control.
 - A new reader branch starts only after the accepted artifact yields a disjoint
-  E4 holdout and the 2,400-character operand gate is rerun.
+  E4 holdout and the full-history-calibrated literal diagnostic is rerun. That
+  diagnostic reports strata; it does not exclude nonliteral cases from QA.
 - DeepSeek and Azure calls remain separately approved execution steps.

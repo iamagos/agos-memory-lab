@@ -4,10 +4,12 @@
 predeclared identity and reproducibility check. It produced 17,201 proposals
 and 17,093 active memory records for $11.48821125 in measured model cost,
 including qualification. At the constrained 2,400-character lexical operating
-point, however, only 8 of 26 answerable contexts contain the exact gold answer
-operand. This run measures acquisition and a zero-call retrieval diagnostic; it
-does **not** measure reader, judge, or end-to-end accuracy and therefore cannot
-be scored against Mem0.
+point, 8 of the 12 literal-applicable answerable contexts contain the exact gold
+answer string. Complete raw history contains that string for only 12 of 26
+answerable cases; the other 14 are derived, normalized, paraphrastic, or
+rubric-based. This run measures acquisition and strict zero-call diagnostics;
+it does **not** measure reader, judge, or end-to-end accuracy and therefore
+cannot be scored against Mem0.
 
 The immutable evidence is stored in
 [`artifacts/longmemeval-s-balanced-30-v1/`](../artifacts/longmemeval-s-balanced-30-v1/).
@@ -55,6 +57,28 @@ validation failure: this treatment emitted no supersession edges, so the run
 does not exercise update replacement even though it includes knowledge-update
 questions.
 
+## Full-history applicability control
+
+The 600,000-character full-history control selected all 1,436 source sessions
+with zero truncation and a mean 498,276 selected characters per case. Its exact
+gold-string result is 12/26, establishing the maximum population to which the
+literal probe applies. Literal absence in the other 14 cases is not evidence
+that a reader lacks sufficient evidence.
+
+On those 12 literal-applicable cases, the equal-character lexical diagnostic is:
+
+| Selected characters | Raw sessions | Memories |
+| ---: | ---: | ---: |
+| 2,400 | 4 / 12 | 8 / 12 |
+| 4,800 | 7 / 12 | 9 / 12 |
+| 9,600 | 8 / 12 | 9 / 12 |
+| 14,400 | 9 / 12 | 9 / 12 |
+
+The complete extracted artifact contains 11/12 source-literal answers. At
+14,400 characters, nine are selected, two fall outside lexical top-100, and one
+source-literal answer was not preserved by extraction. These are strict string
+diagnostics, not end-to-end ceilings.
+
 ## What the 2,400-character diagnostic says
 
 The kernel selected 483 memories across 30 cases: a mean of 16.1 memories,
@@ -65,12 +89,15 @@ For the 26 answerable cases:
 
 | Diagnostic | Result |
 | --- | ---: |
-| Exact answer operand present | 8 / 26 (30.8%) |
-| Exact answer operand absent | 18 / 26 (69.2%) |
+| Literal-applicable in complete history | 12 / 26 (46.2%) |
+| Derived or normalized answer | 14 / 26 (53.8%) |
+| Exact string present, applicable subset | 8 / 12 (66.7%) |
+| Exact string absent, applicable subset | 4 / 12 (33.3%) |
 | Kernel `recall_any@10` | 88.5% |
 | Kernel `recall_all@10` | 84.6% |
 
-Exact-operand survival is uneven by question type:
+The uncalibrated 8/26 distribution is retained below only to show where exact
+strings occur; it must not be interpreted as answerability by type:
 
 | Question type | Exact operand present |
 | --- | ---: |
@@ -81,11 +108,13 @@ Exact-operand survival is uneven by question type:
 | Single-session preference | 0 / 5 |
 | Temporal reasoning | 0 / 4 |
 
-The gap between session-reference recall and exact-operand coverage is the main
-finding. Retrieving a memory linked to a gold session does not ensure that the
-answer-bearing detail survived extraction and the final character budget. A
-reader run at this operating point would conflate reader quality with missing
-operands.
+The gap between session-reference recall and strict literal coverage remains a
+useful extraction/retrieval trace, but it is not the measured end-to-end
+bottleneck. Retrieving a memory linked to a gold session does not ensure that an
+exact source string survived extraction and selection; conversely, a derived or
+normalized answer can be supported without that string. A bounded reader run is
+therefore required to determine whether the nonliteral cases contain adequate
+evidence.
 
 The marker audit finds explicit whole-word `User` and/or `Assistant`
 attribution in 16,874 of 17,093 active records (98.7%). All 66 memories selected
@@ -136,7 +165,9 @@ on 2026-08-21.
 The only defensible comparison today is experimental coverage: Mem0 publishes a
 complete end-to-end lane, while this package establishes a reproducible Agos
 acquisition lane and exposes its next bottleneck. Neither 8/26 nor the kernel
-recall figures may be subtracted from 91.0% or 94.4%.
+recall figures is an accuracy measure, and neither may be subtracted from 91.0%
+or 94.4%. The 8/26 count is additionally inapplicable to 14 derived or
+normalized answers.
 
 ## Presentation decision
 
@@ -144,8 +175,9 @@ Present the work in four blocks, in this order:
 
 1. **Acquisition completed:** treatment, identities, 30-case coverage, cost,
    and deterministic validation.
-2. **Diagnostic finding:** exact operands survive in 8/26 answerable contexts at
-   2,400 characters despite much higher session-reference recall.
+2. **Diagnostic finding:** the exact gold string exists in complete history for
+   12/26 answerable cases and survives in 8/12 at 2,400 characters, while
+   session-reference recall is substantially higher.
 3. **External context:** quote Mem0's pinned 500-case result only as a published
    reference, with the cohort, retrieval, reader, judge, and metric differences
    adjacent to the number.
@@ -155,18 +187,19 @@ Present the work in four blocks, in this order:
    500-case micro accuracy.
 
 Do not headline an “Agos versus Mem0” percentage from this package. The useful
-headline is: **the frozen GPT-5 acquisition is reproducible; operand survival at
-the constrained retrieval boundary is now the measured bottleneck.**
+headline is: **the frozen GPT-5 acquisition is reproducible; strict literal
+coverage and session recall justify a bounded reader experiment, but do not
+predict its answer accuracy.**
 
 ## Next gate
 
 Before spending on a reader or judge:
 
 1. freeze development and holdout IDs without inspecting reader output;
-2. test retrieval/representation changes with the zero-call operand gate,
-   including a budget sweep and at least one non-lexical lane;
-3. authorize reader calls only after the operating point materially improves or
-   explicitly accept missing-operand cases as part of the end-to-end treatment;
+2. freeze each candidate ranking, then sweep retrieval depth independently from
+   reader character budget; PR #43 owns the ranking-reuse harness seam;
+3. report session recall and calibrated literal coverage before authorizing a
+   bounded reader experiment over both literal and nonliteral cases;
 4. add a locally executed Mem0 lane before making a causal or competitive claim.
 
 Any later headline result must keep all non-memory variables fixed and publish
