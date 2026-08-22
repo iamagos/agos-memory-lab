@@ -1,0 +1,242 @@
+{
+  "active_records": {
+    "by_case": {
+      "001be529": {
+        "assistant-attributed": 425,
+        "mixed-attributed": 16,
+        "unattributed": 2,
+        "user-attributed": 148
+      },
+      "0edc2aef": {
+        "assistant-attributed": 385,
+        "mixed-attributed": 10,
+        "unattributed": 5,
+        "user-attributed": 141
+      },
+      "1c0ddc50": {
+        "assistant-attributed": 517,
+        "mixed-attributed": 11,
+        "unattributed": 1,
+        "user-attributed": 159
+      },
+      "1c549ce4": {
+        "assistant-attributed": 331,
+        "mixed-attributed": 14,
+        "unattributed": 2,
+        "user-attributed": 133
+      },
+      "1faac195": {
+        "assistant-attributed": 380,
+        "mixed-attributed": 9,
+        "unattributed": 4,
+        "user-attributed": 124
+      },
+      "29f2956b_abs": {
+        "assistant-attributed": 538,
+        "mixed-attributed": 12,
+        "unattributed": 17,
+        "user-attributed": 136
+      },
+      "2a1811e2": {
+        "assistant-attributed": 418,
+        "mixed-attributed": 10,
+        "unattributed": 3,
+        "user-attributed": 136
+      },
+      "3e321797": {
+        "assistant-attributed": 422,
+        "mixed-attributed": 9,
+        "unattributed": 2,
+        "user-attributed": 128
+      },
+      "4dfccbf8": {
+        "assistant-attributed": 362,
+        "mixed-attributed": 10,
+        "unattributed": 3,
+        "user-attributed": 151
+      },
+      "54026fce": {
+        "assistant-attributed": 368,
+        "mixed-attributed": 14,
+        "unattributed": 20,
+        "user-attributed": 152
+      },
+      "6071bd76": {
+        "assistant-attributed": 407,
+        "mixed-attributed": 5,
+        "unattributed": 4,
+        "user-attributed": 150
+      },
+      "6ae235be": {
+        "assistant-attributed": 394,
+        "mixed-attributed": 11,
+        "unattributed": 18,
+        "user-attributed": 116
+      },
+      "6aeb4375": {
+        "assistant-attributed": 384,
+        "mixed-attributed": 7,
+        "unattributed": 4,
+        "user-attributed": 138
+      },
+      "6aeb4375_abs": {
+        "assistant-attributed": 383,
+        "mixed-attributed": 12,
+        "unattributed": 1,
+        "user-attributed": 122
+      },
+      "70b3e69b": {
+        "assistant-attributed": 433,
+        "mixed-attributed": 7,
+        "unattributed": 16,
+        "user-attributed": 136
+      },
+      "71a3fd6b": {
+        "assistant-attributed": 417,
+        "mixed-attributed": 16,
+        "unattributed": 18,
+        "user-attributed": 123
+      },
+      "77eafa52": {
+        "assistant-attributed": 418,
+        "mixed-attributed": 33,
+        "unattributed": 5,
+        "user-attributed": 114
+      },
+      "7e00a6cb": {
+        "assistant-attributed": 492,
+        "mixed-attributed": 7,
+        "unattributed": 53,
+        "user-attributed": 131
+      },
+      "95228167": {
+        "assistant-attributed": 305,
+        "mixed-attributed": 8,
+        "unattributed": 3,
+        "user-attributed": 157
+      },
+      "9ea5eabc": {
+        "assistant-attributed": 448,
+        "mixed-attributed": 10,
+        "unattributed": 8,
+        "user-attributed": 143
+      },
+      "a1eacc2a": {
+        "assistant-attributed": 450,
+        "mixed-attributed": 9,
+        "unattributed": 2,
+        "user-attributed": 130
+      },
+      "a89d7624": {
+        "assistant-attributed": 447,
+        "mixed-attributed": 10,
+        "unattributed": 5,
+        "user-attributed": 137
+      },
+      "a9f6b44c": {
+        "assistant-attributed": 392,
+        "mixed-attributed": 10,
+        "user-attributed": 148
+      },
+      "dccbc061": {
+        "assistant-attributed": 399,
+        "mixed-attributed": 8,
+        "unattributed": 4,
+        "user-attributed": 152
+      },
+      "e5ba910e_abs": {
+        "assistant-attributed": 450,
+        "mixed-attributed": 16,
+        "unattributed": 1,
+        "user-attributed": 119
+      },
+      "faba32e5": {
+        "assistant-attributed": 394,
+        "mixed-attributed": 15,
+        "unattributed": 9,
+        "user-attributed": 130
+      },
+      "gpt4_7bc6cf22": {
+        "assistant-attributed": 470,
+        "mixed-attributed": 21,
+        "unattributed": 1,
+        "user-attributed": 114
+      },
+      "gpt4_7fce9456": {
+        "assistant-attributed": 375,
+        "mixed-attributed": 8,
+        "unattributed": 2,
+        "user-attributed": 137
+      },
+      "gpt4_c27434e8_abs": {
+        "assistant-attributed": 461,
+        "mixed-attributed": 9,
+        "unattributed": 3,
+        "user-attributed": 122
+      },
+      "gpt4_e414231e": {
+        "assistant-attributed": 388,
+        "mixed-attributed": 31,
+        "unattributed": 3,
+        "user-attributed": 126
+      }
+    },
+    "classification": {
+      "assistant-attributed": 12453,
+      "mixed-attributed": 368,
+      "unattributed": 219,
+      "user-attributed": 4053
+    },
+    "total": 17093
+  },
+  "method": {
+    "markers": [
+      "case-insensitive whole word user",
+      "case-insensitive whole word assistant"
+    ],
+    "mixed": "both markers present",
+    "scope": "active artifact records and 2400-character abstention contexts",
+    "unattributed": "neither marker present"
+  },
+  "schema": "agos-memory-lab-attribution-audit-v1",
+  "selected_abstention_contexts": {
+    "29f2956b_abs": {
+      "classification": {
+        "assistant-attributed": 11,
+        "user-attributed": 5
+      },
+      "selected": 16
+    },
+    "6aeb4375_abs": {
+      "classification": {
+        "assistant-attributed": 9,
+        "user-attributed": 7
+      },
+      "selected": 16
+    },
+    "e5ba910e_abs": {
+      "classification": {
+        "assistant-attributed": 4,
+        "mixed-attributed": 1,
+        "user-attributed": 12
+      },
+      "selected": 17
+    },
+    "gpt4_c27434e8_abs": {
+      "classification": {
+        "assistant-attributed": 7,
+        "mixed-attributed": 2,
+        "user-attributed": 8
+      },
+      "selected": 17
+    }
+  },
+  "sources": {
+    "artifact": {
+      "sha256": "010679fb2b9035b5e7d6157bba9e19cf5319a421af0d8dfb2f6b026e6f45a0f6"
+    },
+    "contexts": {
+      "sha256": "298cd66653b7d3e9d315f50feb7c16b4751378c052c8df5c96e7fa493e6a8005"
+    }
+  }
+}

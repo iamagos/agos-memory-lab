@@ -1,5 +1,11 @@
 # Frozen 30-case artifact acquisition
 
+> **Completed 2026-08-21.** All eight acceptance checks passed. The immutable
+> package and measured findings are in
+> [`artifacts/longmemeval-s-balanced-30-v1/`](../artifacts/longmemeval-s-balanced-30-v1/)
+> and [`docs/frozen-30-gpt5-run.md`](frozen-30-gpt5-run.md). The request below is
+> retained as the predeclared acquisition contract.
+
 **TL;DR.** Request one memory artifact and its complete extractor JSONL for the
 already frozen balanced manifest. Do not request reader outputs, judgements, or
 a new dataset. The lab already owns and verifies every other input.

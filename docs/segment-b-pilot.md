@@ -1,5 +1,12 @@
 # Segment B pre-flight: the reader contract pilot
 
+> **Status update — 2026-08-21.** E0 is no longer externally blocked: the
+> frozen balanced-30 GPT-5 artifact and complete extractor were acquired and
+> validated. Its 2,400-character exact-operand gate passes 8/26 answerable
+> cases. The current findings and Mem0 comparability boundary are recorded in
+> [`frozen-30-gpt5-run.md`](frozen-30-gpt5-run.md); historical planning below is
+> retained for provenance.
+
 Segment B holds the reader, judge, prompts, and budget **fixed** across every
 rung of the ladder. That is what makes the ladder a measurement of acquisition
 and retrieval rather than of answer generation.

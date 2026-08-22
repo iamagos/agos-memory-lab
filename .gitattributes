@@ -6,3 +6,5 @@
 *.py text eol=lf
 *.toml text eol=lf
 *.yml text eol=lf
+/artifacts/**/*.json -text -diff
+/artifacts/**/*.jsonl -text -diff

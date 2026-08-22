@@ -1,5 +1,11 @@
 # Segment B artifact decision
 
+> **Historical decision, superseded 2026-08-21.** The requested 30-case GPT-5
+> artifact was acquired and validated. See
+> [`frozen-30-gpt5-run.md`](frozen-30-gpt5-run.md) for the larger-cohort result,
+> Mem0 context, and next gate. The ten-case analysis below remains the
+> pre-acquisition record.
+
 **TL;DR.** The received ten-case artifact is valid, but it does not license a
 paid reader sweep. At the 2,400-character operating point, four of six
 answerable cases are semantically reader-testable and two are not; the artifact

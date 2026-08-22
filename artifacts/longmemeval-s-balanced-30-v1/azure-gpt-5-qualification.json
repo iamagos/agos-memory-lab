@@ -1,0 +1,50 @@
+{
+  "config": {
+    "execution": {
+      "concurrency": 1,
+      "input_cost_per_million": 1.25,
+      "max_cost_usd": 0.05,
+      "output_cost_per_million": 10.0,
+      "retries": 0,
+      "timeout": 120.0
+    },
+    "request": {
+      "adapter": {
+        "api": "chat-completions",
+        "openai": "3.3.0",
+        "pydantic_ai": "2.21.0"
+      },
+      "api_version": null,
+      "base_url": "https://agos-memory-evals-openai.openai.azure.com/openai/v1",
+      "max_tokens": 1024,
+      "max_tokens_field": "max_completion_tokens",
+      "model": "gpt-5",
+      "provider": "azure",
+      "provider_id": "azure-openai",
+      "reasoning_effort": "minimal",
+      "temperature": null
+    }
+  },
+  "measurements": {
+    "latency_seconds": 2.815627
+  },
+  "output_schema_sha256": "5c2e4c3de05791b1136a70b5fe1dc08115e0c9e43ce53691eebf835c6965242c",
+  "prompt_sha256": "8ac32d3a776b6ecdbef7b29790b32bd378632202beeb7410d65814c0ea362d46",
+  "receipt_sha256": "b88f22e10cba5132e735955df660febb78aef984991bc14cc43d7dc78ce201cc",
+  "request_id": "578382f71880c322fc6a4e4caae2f68e99f8018a93f471a99927cd81f22b6334",
+  "result": {
+    "cost": {
+      "estimated_usd": 0.000665,
+      "reserved_usd": 0.01095875
+    },
+    "nonce_sha256": "1f7dbfa49ce478d8afc011f9983553b98d43d16b5cd497a7efd40b3674dafdaf",
+    "response_model": "gpt-5-2025-08-07",
+    "usage": {
+      "input_tokens": 164,
+      "output_tokens": 46,
+      "total_tokens": 210
+    }
+  },
+  "run_id": "2a122809b8b6d78f7d20e227a6287b1230442484118d34c32c6aeab88485c042",
+  "schema": "agos-memory-lab-endpoint-qualification-v1"
+}
