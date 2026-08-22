@@ -42,6 +42,8 @@ from agos_memory.types import (
 )
 from rank_bm25 import BM25Okapi
 
+import case_manifest
+
 if TYPE_CHECKING:
   import memory
 
@@ -149,6 +151,7 @@ def _parser() -> argparse.ArgumentParser:
   run.add_argument("--sha256", help="Required SHA-256 for --file.")
   run.add_argument("--revision", help="Required immutable identity for --file.")
   run.add_argument("--data", type=Path, default=Path("data"))
+  run.add_argument("--manifest", type=Path, help="Frozen case manifest applied before offset and limit.")
   run.add_argument("--source", choices=_Source.__args__, default="sessions")
   run.add_argument("--artifact", type=Path, help="Required source-linked artifact for memories.")
   run.add_argument("--artifact-sha256", help="Required artifact SHA-256 for memories.")
@@ -217,9 +220,7 @@ def _run(args: argparse.Namespace) -> None:
   _verify_file(source["path"], sha256=source["sha256"], size=source["size"])
   all_cases = _load(source["path"])
   artifact, memories_by_case = _load_memories(args, source=source, cases=all_cases)
-  cases = all_cases[args.offset : None if args.limit == 0 else args.offset + args.limit]
-  if not cases:
-    raise LongMemError("dataset_selection_empty")
+  cases, selection = _select_cases(all_cases, args=args, source=source)
   entries_by_case = {
     case.question_id: (
       _session_entries(case)
@@ -458,6 +459,8 @@ def _run(args: argparse.Namespace) -> None:
     "lexical_weight": args.lexical_weight,
     "retriever_identity": retriever_identity,
   }
+  if selection is not None:
+    config = {**config, "selection": selection}
   if artifact is not None:
     config = {**config, "source": "memories", "artifact": artifact.identity}
   if args.episodes:
@@ -1194,7 +1197,7 @@ class _Qdrant:
 
 def _load(path: Path) -> tuple[Case, ...]:
   try:
-    with path.open() as source:
+    with path.open(encoding="utf-8") as source:
       values = json.load(source)
   except (OSError, json.JSONDecodeError) as exc:
     raise LongMemError(f"dataset_read_failed:{exc}") from exc
@@ -1205,6 +1208,33 @@ def _load(path: Path) -> tuple[Case, ...]:
   if len(ids) != len(set(ids)):
     raise LongMemError("dataset_question_identity_duplicated")
   return cases
+
+
+def _select_cases(
+  cases: tuple[Case, ...],
+  *,
+  args: argparse.Namespace,
+  source: dict[str, Any],
+) -> tuple[tuple[Case, ...], dict[str, Any] | None]:
+  if args.offset < 0 or args.limit < 0:
+    raise LongMemError("dataset_window_invalid")
+  identity = None
+  manifest_path = getattr(args, "manifest", None)
+  if manifest_path is not None:
+    try:
+      cases, manifest = case_manifest.select(
+        manifest_path,
+        cases,
+        benchmark={"repository": _BENCHMARK_REPOSITORY, "revision": _BENCHMARK_REVISION},
+        dataset=source,
+      )
+    except case_manifest.ManifestError as exc:
+      raise LongMemError(str(exc)) from exc
+    identity = {"mode": "manifest", "manifest": manifest}
+  selected = cases[args.offset : None if args.limit == 0 else args.offset + args.limit]
+  if not selected:
+    raise LongMemError("dataset_selection_empty")
+  return selected, identity
 
 
 def _case(value: Any) -> Case:
@@ -1350,17 +1380,17 @@ def _unique(values: tuple[str, ...]) -> tuple[str, ...]:
 def _write(path: Path, value: dict[str, Any]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+  partial.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
   os.replace(partial, path)
 
 
 def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> str:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  encoded = "".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values)
-  partial.write_text(encoded)
+  encoded = "".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values).encode("utf-8")
+  partial.write_bytes(encoded)
   os.replace(partial, path)
-  return hashlib.sha256(encoded.encode()).hexdigest()
+  return hashlib.sha256(encoded).hexdigest()
 
 
 def _digest(value: Any) -> str:

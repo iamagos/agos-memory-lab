@@ -1,0 +1,68 @@
+{
+  "benchmark": {
+    "repository": "xiaowu0162/LongMemEval",
+    "revision": "9e0b455f4ef0e2ab8f2e582289761153549043fc"
+  },
+  "dataset": {
+    "file": "longmemeval_s_cleaned.json",
+    "repository": "xiaowu0162/longmemeval-cleaned",
+    "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "size": 277383467
+  },
+  "schema": "agos-memory-lab-case-manifest-v1",
+  "selection": {
+    "abstention_by_type": {
+      "knowledge-update": 1,
+      "multi-session": 1,
+      "single-session-assistant": 0,
+      "single-session-preference": 0,
+      "single-session-user": 1,
+      "temporal-reasoning": 1
+    },
+    "cases_per_type": 5,
+    "method": "sha256-ranked-stratified-v1",
+    "question_ids": [
+      "dccbc061",
+      "001be529",
+      "1faac195",
+      "faba32e5",
+      "29f2956b_abs",
+      "gpt4_7fce9456",
+      "a9f6b44c",
+      "0edc2aef",
+      "54026fce",
+      "95228167",
+      "a89d7624",
+      "1c0ddc50",
+      "77eafa52",
+      "1c549ce4",
+      "e5ba910e_abs",
+      "gpt4_e414231e",
+      "gpt4_7bc6cf22",
+      "4dfccbf8",
+      "2a1811e2",
+      "gpt4_c27434e8_abs",
+      "6aeb4375",
+      "9ea5eabc",
+      "a1eacc2a",
+      "6071bd76",
+      "6aeb4375_abs",
+      "6ae235be",
+      "7e00a6cb",
+      "71a3fd6b",
+      "70b3e69b",
+      "3e321797"
+    ],
+    "question_types": {
+      "knowledge-update": 5,
+      "multi-session": 5,
+      "single-session-assistant": 5,
+      "single-session-preference": 5,
+      "single-session-user": 5,
+      "temporal-reasoning": 5
+    },
+    "revision": "segment-a-balanced-30-v1",
+    "seed": "agos-segment-a-v1"
+  }
+}

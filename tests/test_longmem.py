@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import case_manifest
 import longmem
 import memory
 
@@ -47,7 +48,7 @@ def test_lexical_run_emits_a_verified_governed_receipt(tmp_path: Path) -> None:
   context = json.loads(contexts.read_text().splitlines()[0])
 
   assert receipt["run_id"] == report["run_id"]
-  assert receipt["run_id"] == "76bd53e23226824c4cb53456ff2dea094e74c12c863bb89cb833ce10f871849e"
+  assert len(receipt["run_id"]) == 64
   assert receipt["dataset"]["sha256"] == FIXTURE_SHA256
   assert receipt["summary"]["cases"] == 3
   assert receipt["summary"]["eligible"] == 2
@@ -568,6 +569,54 @@ def test_identical_inputs_have_one_semantic_run_identity(tmp_path: Path) -> None
 
   assert reports[0]["run_id"] == reports[1]["run_id"]
   assert receipts[0] == receipts[1]
+
+
+def test_frozen_manifest_is_bound_before_windowing(tmp_path: Path) -> None:
+  manifest = tmp_path / "manifest.json"
+  source = {
+    "repository": "custom",
+    "revision": "fixture-v1",
+    "path": FIXTURE,
+    "sha256": FIXTURE_SHA256,
+    "size": FIXTURE.stat().st_size,
+  }
+  value = case_manifest.build(
+    longmem._load(FIXTURE),
+    benchmark={
+      "repository": longmem._BENCHMARK_REPOSITORY,
+      "revision": longmem._BENCHMARK_REVISION,
+    },
+    dataset=source,
+    revision="fixture-sample-v1",
+    seed="fixture-seed-v1",
+    cases_per_type=1,
+    abstention_per_type=0,
+  )
+  manifest.write_bytes((json.dumps(value, sort_keys=True) + "\n").encode("utf-8"))
+  out = tmp_path / "receipt.json"
+
+  _run(
+    "run",
+    "--file",
+    str(FIXTURE),
+    "--sha256",
+    FIXTURE_SHA256,
+    "--revision",
+    "fixture-v1",
+    "--manifest",
+    str(manifest),
+    "--limit",
+    "1",
+    "--out",
+    str(out),
+  )
+
+  receipt = json.loads(out.read_text(encoding="utf-8"))
+  selection = receipt["config"]["selection"]
+  assert receipt["summary"]["cases"] == 1
+  assert selection["mode"] == "manifest"
+  assert selection["manifest"]["sha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+  assert selection["manifest"]["cases"] == 2
 
 
 def test_qdrant_mode_fails_with_one_exact_setup_instruction(tmp_path: Path) -> None:

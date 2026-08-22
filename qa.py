@@ -384,7 +384,7 @@ def _references(args: argparse.Namespace) -> tuple[tuple[Reference, ...], dict[s
   except longmem.LongMemError as exc:
     raise QAError(str(exc)) from exc
   try:
-    with path.open() as source:
+    with path.open(encoding="utf-8") as source:
       values = json.load(source)
   except (OSError, json.JSONDecodeError) as exc:
     raise QAError("reference_file_invalid") from exc
@@ -734,7 +734,7 @@ def _jsonl(path: Path, *, error: str) -> list[Any]:
     raise QAError(error)
   values = []
   try:
-    with path.open() as source:
+    with path.open(encoding="utf-8") as source:
       for line in source:
         if line.strip():
           values.append(json.loads(line))
@@ -799,14 +799,16 @@ def _clear_pending(path: Path) -> None:
 def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text("".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values))
+  partial.write_bytes(
+    "".join(f"{json.dumps(value, sort_keys=True)}\n" for value in values).encode("utf-8")
+  )
   os.replace(partial, path)
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   partial = path.with_suffix(f"{path.suffix}.part")
-  partial.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+  partial.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
   os.replace(partial, path)
 
 
